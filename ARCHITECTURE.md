@@ -5,6 +5,8 @@ Foundation design for the state machine, screen flow, and server data model that
 > **Revision 2.** This revision incorporates a full consistency audit (§13). Every fix described there has been applied inline throughout §1–§12; §13 is the record of what changed and why, plus the implementation-readiness checklist.
 >
 > **Revision 3.** One further contradiction surfaced while implementing Development Steps 1–2 (shared types + in-memory FSM core) and has been patched inline: `RoundRecord` (§8.5) now persists a `corruptionRevealed` flag alongside `corrupted`, computed once at push time, instead of relying solely on the ephemeral `CurrentRoundState.corruptionRevealed` which disappeared once a round left `currentRound`. See §13.7 for the full write-up. No other architectural changes were made — implementation matched the rest of Revision 2 as designed.
+>
+> **Revision 4.** Development Step 3 (Redis-backed room store and room actor — `apps/server/src/persistence/`, `apps/server/src/actors/`) is implemented. One documentation-only inaccuracy was found and corrected in §7: the key-structure table and its surrounding prose overstated what's excluded from `room:{roomId}`, implying vote content never lives there — it does, by design (§13.2/§3.16), and only in-progress-vote *exposure to clients* is what's actually gated by the view layer. See §13.8. No type or behavior changed.
 
 ---
 
@@ -498,10 +500,10 @@ Identity (`playerId` or "is host") is established once at connection time (§1.1
 
 ## 7. Live Room-State Structure (Redis)
 
-One JSON document per room at key `room:{roomId}`, split into a public document and a private document so an accidental full-document read/log/dump can never leak roles or votes:
+One JSON document per room at key `room:{roomId}`, split into a public document and a private document so an accidental full-document read/log/dump of `room:{roomId}` can never leak roles or corruption choices (votes are a deliberate exception — see the note below the table):
 
 ```
-room:{roomId}            -> RoomState (JSON)          # no role/vote/corruption-choice content lives here
+room:{roomId}            -> RoomState (JSON)          # no role or corruption-choice content lives here — vote content DOES (see note below)
 room:{roomId}:private    -> RoomPrivateState (JSON)    # roles, per-hacker corruption choices, session-token↔playerId map
 roomCode:{code}          -> roomId                     (TTL matches room)
 session:{sessionToken}   -> { roomId, playerId }       (TTL matches room, refreshed on activity)
@@ -509,6 +511,8 @@ hostSession:{token}      -> { roomId }                 (TTL matches room, refres
 ```
 
 `RoomState` and `RoomPrivateState` are **server-internal persistence documents** — they are written to Redis for durability/recovery, but **no code path serializes either of them directly onto the wire**. Every outbound payload is one of the explicit projections in §8.6 (`TvView`, `PlayerView`, `PrivatePlayerPayload`), built fresh at send time. This is the resolution to §13 issue #5 — private/public separation is enforced by "there is no function that turns `RoomState` into wire bytes," not by a redaction step that could be forgotten.
+
+> **Note on vote content (found during Step 3 implementation, corrected here — see §13.8):** `RoomState.currentVote` (§8.5, `CurrentVoteState.votes`) and `RoomState.voteHistory` (`VoteRecord.votes`) both hold the actual `{voterId: targetId}` mapping, on `RoomState` — **not** `RoomPrivateState`. This is intentional, not an oversight: votes are meant to become fully public once a round of voting resolves (§3.16: `match:voteResult` broadcasts the full tally), so there is no reason to keep them in the private document even while a *revote* is possible. What keeps an **in-progress** vote hidden from other players until it resolves is `buildTvView`/`buildPlayerView` only ever exposing `votingProgress` (a count) while `currentVote` is non-null — the same "enforced by the view layer, not by which Redis key it's in" principle as everything else in §8.6. The original wording above this note previously implied `room:{roomId}` never holds vote content at all, which was inaccurate; corrected in this revision.
 
 ### 7.1 Concurrency Strategy
 
@@ -1526,3 +1530,13 @@ While implementing the shared types package and the in-memory FSM core (this rev
 | 13 | `CurrentRoundState.corruptionRevealed` (§8.5) was the only place recording whether a round's `corrupted` flag may be exposed to clients — but it lived on `currentRound`, which is set to `null` the moment `RESULTS_REVEAL` exits (§3.10). Any view built afterward (e.g. a `DISCUSSION` recap, or a later full-match summary) reading the already-completed entry in `roundHistory` had no equivalent flag to consult. A view builder that (reasonably) trusted `RoundRecord.corrupted` directly, without re-deriving the reveal decision from scratch, would leak corruption retroactively for every completed round — including under `corruptionRevealPolicy: 'never'`, which is exactly the leak §13 issue #4 was meant to close. Separately, the `'on_instructions'` policy value was documented as valid (§3.7, §8.2) but never actually wired into any pseudocode branch — only `'on_results'` had a concrete implementation. | `RoundRecord` (§8.5), `MINIGAME_PLAY` exit pseudocode (§9) | Added `corruptionRevealed: boolean` to `RoundRecord` itself, computed **once, at push time**, and persisted permanently alongside the record — not derived from `currentRound` after the fact. The computation now happens at one of two points depending on policy: immediately after `HACKER_CORRUPTION` resolves (for `'on_instructions'`) or immediately before the `roundHistory.push` at `MINIGAME_PLAY` exit (for `'on_results'`); `'never'` never sets it. Both call sites write the SAME field (`currentRound.corruptionRevealed`), which is then copied verbatim into the pushed `RoundRecord`. This also incidentally wires up `'on_instructions'`, which Revision 2 had left as an unimplemented (but documented) option. |
 
 This is the only architectural change made during Step 1/2 implementation — everything else in Revision 2 (host/player session split, view projections, `MiniGameModule` boundary, two-tier idempotency, the `resolveAfterRoundOrSpecial()` branch reuse, the concurrency MVP, rule-id registries) was implemented exactly as designed, with unit tests (`apps/server/test/`) confirming each behavior, and did not require any further doc changes.
+
+### 13.8 Revision 4 — Documentation Inaccuracy Found During Step 3 Implementation
+
+While writing the zod validation schemas for the Redis-persisted `RoomState` document (Development Step 3: Redis-backed room store and room actor), building an accurate schema required enumerating exactly what lives on `RoomState` field-by-field — which surfaced a factual inaccuracy in §7's own description of itself, not a structural design flaw:
+
+| # | Issue | Where it showed up | Resolution |
+|---|---|---|---|
+| 14 | §7's key-structure comment claimed `room:{roomId}` (the `RoomState` document) holds "no role/vote/corruption-choice content," and the surrounding prose claimed a raw dump of that key "can never leak roles or votes." Both statements are true for roles and corruption choices (those genuinely live only in `RoomPrivateState`), but **false for votes** — `CurrentVoteState.votes` and every `VoteRecord.votes` in `voteHistory` are declared directly on `RoomState` (§8.5), by design (§13.2/§3.16: votes are meant to become fully public once a voting round resolves, so there was never a reason to shadow them into `RoomPrivateState`). The doc's own summary line oversold what §8.5's types actually declare. | §7 intro sentence and key-structure code comment | Corrected the sentence and the inline comment to say "no role or corruption-choice content," and added an explanatory note directly under the key-structure table clarifying that vote content living in `RoomState` is intentional — privacy for an *in-progress* vote is enforced by the view layer (`buildTvView`/`buildPlayerView` exposing only `votingProgress` counts while `currentVote` is non-null), the same mechanism used everywhere else in §8.6, not by which Redis key the data sits in. No type or behavior changed — this was a wording fix only. |
+
+No code or type changed as a result of this finding — `RoomStateSchema` (`apps/server/src/persistence/schemas.ts`) already validates `currentVote`/`voteHistory` as part of `RoomState`, matching the (now-corrected) documentation.

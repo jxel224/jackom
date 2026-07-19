@@ -1,4 +1,4 @@
-// Barrel export of the server package's public surface (Step 1 + Step 2 only — no networking/persistence yet).
+// Barrel export of the server package's public surface (Steps 1-3 — no WebSocket gateway, UI, or Postgres yet).
 
 export * from './shared.js';
 
@@ -43,3 +43,29 @@ export type { TallyResult } from './voting/tally.js';
 export { buildTvView } from './views/build-tv-view.js';
 export { buildPlayerView } from './views/build-player-view.js';
 export { buildPrivatePlayerView } from './views/build-private-player-view.js';
+
+// ---- Step 3: persistence + room actor ----------------------------------------------------------
+
+export type { KeyValueStore } from './persistence/kv-store.js';
+export { InMemoryKeyValueStore } from './persistence/in-memory-kv-store.js';
+export { RedisKeyValueStore } from './persistence/redis-kv-store.js';
+export { RepositoryError, RoomConsistencyError } from './persistence/errors.js';
+export type { RepositoryErrorCode, RoomConsistencyErrorCode } from './persistence/errors.js';
+export { DEFAULT_ROOM_TTL_SECONDS } from './persistence/config.js';
+export * as persistenceKeys from './persistence/keys.js';
+export { noopRoomLogger, consoleRoomLogger } from './persistence/logging.js';
+export type { RoomLogger, RoomLogEvent } from './persistence/logging.js';
+
+export { KeyValueRoomStateRepository } from './persistence/room-state-repo.js';
+export type { RoomStateRepository } from './persistence/room-state-repo.js';
+export { KeyValueRoomPrivateStateRepository } from './persistence/room-private-state-repo.js';
+export type { RoomPrivateStateRepository } from './persistence/room-private-state-repo.js';
+export { KeyValueRoomLookupRepository } from './persistence/room-lookup-repo.js';
+export type { RoomLookupRepository } from './persistence/room-lookup-repo.js';
+export { KeyValueSessionRepository } from './persistence/session-repo.js';
+export type { SessionRepository, PlayerSessionRecord, HostSessionRecord } from './persistence/session-repo.js';
+
+export { RoomActor } from './actors/room-actor.js';
+export type { RoomActorDeps } from './actors/room-actor.js';
+export { RoomActorManager } from './actors/room-actor-manager.js';
+export type { RoomActorManagerDeps, CreatedRoomHandle } from './actors/room-actor-manager.js';
