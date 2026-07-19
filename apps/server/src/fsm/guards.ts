@@ -15,19 +15,26 @@ export function isStalePhase(room: RoomState, event: InboundEvent): boolean {
 }
 
 /**
+ * These event types are never actually produced by a connected client — they're synthesized by the
+ * (Step 4) WebSocket gateway's connection tracker (on socket open/close) or, eventually, a
+ * server-side timer scheduler. They carry no meaningful "sender" to authenticate, so they're exempt
+ * from the host/player identity check below.
+ */
+const SYSTEM_EVENT_TYPES = new Set<InboundEvent['type']>([
+  'timer:expired',
+  'player:disconnected',
+  'player:reconnected',
+  'host:graceExpired',
+  'host:disconnected',
+  'host:reconnected',
+]);
+
+/**
  * Cross-checks the event's declared kind against the already-authenticated sender. A host-shaped
  * event from a player sender (or vice versa) is rejected; a player event whose payload playerId
  * doesn't match the authenticated sender's playerId is also rejected — identity is never trusted
  * from the payload (ARCHITECTURE.md §1.1).
  */
-/**
- * These event types are never actually produced by a connected client — `timer:expired` comes
- * from the (not-yet-built) server-side timer scheduler, `player:disconnected` and
- * `host:graceExpired` come from the connection tracker noticing a drop. They carry no meaningful
- * "sender" to authenticate, so they're exempt from the host/player identity check below.
- */
-const SYSTEM_EVENT_TYPES = new Set<InboundEvent['type']>(['timer:expired', 'player:disconnected', 'host:graceExpired']);
-
 export function checkSenderMatchesEvent(event: InboundEvent, sender: EventSender): 'NOT_HOST' | 'IDENTITY_MISMATCH' | null {
   if (SYSTEM_EVENT_TYPES.has(event.type)) return null;
 

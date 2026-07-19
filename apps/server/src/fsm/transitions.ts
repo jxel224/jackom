@@ -352,6 +352,23 @@ function handlePlayerDisconnected(room: RoomState, playerId: string): void {
   }
 }
 
+/** Immediate status flip only — synthesized by the Step 4 gateway right after a reconnect succeeds. */
+function handlePlayerReconnected(room: RoomState, playerId: string): void {
+  const player = room.players[playerId];
+  if (player) {
+    player.connectionStatus = 'connected';
+  }
+}
+
+/** Immediate status flip only — NOT grace expiry/abandonment (still `host:graceExpired`, timer-driven). */
+function handleHostSocketDisconnected(room: RoomState): void {
+  room.host.connectionStatus = 'disconnected';
+}
+
+function handleHostSocketReconnected(room: RoomState): void {
+  room.host.connectionStatus = 'connected';
+}
+
 // ---- Per-state handlers ----------------------------------------------------------------------
 
 function handleLobby(room: RoomState, priv: RoomPrivateState, event: InboundEvent, deps: Deps): HandleEventResult {
@@ -662,6 +679,18 @@ export function handleEvent(room: RoomState, priv: RoomPrivateState, event: Inbo
   // phaseId/state switch below entirely.
   if (event.type === 'player:disconnected') {
     handlePlayerDisconnected(nextRoom, event.playerId);
+    return ok(nextRoom, nextPriv);
+  }
+  if (event.type === 'player:reconnected') {
+    handlePlayerReconnected(nextRoom, event.playerId);
+    return ok(nextRoom, nextPriv);
+  }
+  if (event.type === 'host:disconnected') {
+    handleHostSocketDisconnected(nextRoom);
+    return ok(nextRoom, nextPriv);
+  }
+  if (event.type === 'host:reconnected') {
+    handleHostSocketReconnected(nextRoom);
     return ok(nextRoom, nextPriv);
   }
   if (event.type === 'host:closeRoom' || event.type === 'host:graceExpired') {

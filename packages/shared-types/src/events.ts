@@ -87,6 +87,27 @@ export interface PlayerDisconnectedEvent {
   playerId: string;
 }
 
+/**
+ * Synthesized by the gateway immediately after a player's reconnect succeeds — flips
+ * `connectionStatus` back to 'connected'. Added in Step 4 so the gateway never has to mutate
+ * `RoomState` directly; connection-status bookkeeping stays inside the FSM, symmetric with
+ * `player:disconnected`.
+ */
+export interface PlayerReconnectedEvent {
+  type: 'player:reconnected';
+  playerId: string;
+}
+
+/** Synthesized by the gateway on host socket close. Immediate status flip only — NOT grace expiry/abandonment (that remains `host:graceExpired`, still timer-driven and out of scope until server timers exist). */
+export interface HostSocketDisconnectedEvent {
+  type: 'host:disconnected';
+}
+
+/** Synthesized by the gateway immediately after a host's (re)connect succeeds. */
+export interface HostSocketReconnectedEvent {
+  type: 'host:reconnected';
+}
+
 export interface TimerExpiredEvent {
   type: 'timer:expired';
   phaseId: string;
@@ -113,6 +134,9 @@ export type InboundEvent =
   | PlayerSubmitVoteEvent
   | PlayerRequestRematchEvent
   | PlayerDisconnectedEvent
+  | PlayerReconnectedEvent
+  | HostSocketDisconnectedEvent
+  | HostSocketReconnectedEvent
   | TimerExpiredEvent;
 
 export type RejectionCode =

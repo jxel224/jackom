@@ -66,6 +66,24 @@ export { KeyValueSessionRepository } from './persistence/session-repo.js';
 export type { SessionRepository, PlayerSessionRecord, HostSessionRecord } from './persistence/session-repo.js';
 
 export { RoomActor } from './actors/room-actor.js';
-export type { RoomActorDeps } from './actors/room-actor.js';
+export type { RoomActorDeps, LifecycleOutcome } from './actors/room-actor.js';
 export { RoomActorManager } from './actors/room-actor-manager.js';
 export type { RoomActorManagerDeps, CreatedRoomHandle } from './actors/room-actor-manager.js';
+
+// ---- Step 4: WebSocket gateway ------------------------------------------------------------------
+
+export { GatewayServer } from './gateway/gateway-server.js';
+export type { GatewayDeps, GatewayOptions } from './gateway/gateway-server.js';
+export type { WireMessage, GatewayErrorCode, GatewayErrorPayload, ConnectionKind } from './gateway/types.js';
+export { RoomSocketRegistry } from './gateway/connection-registry.js';
+export { RateLimiter } from './gateway/rate-limiter.js';
+export {
+  WireMessageSchema,
+  FSM_EVENT_PAYLOAD_SCHEMAS,
+  PlayerJoinPayloadSchema,
+  PlayerReconnectPayloadSchema,
+  HostReconnectPayloadSchema,
+  PlayerLeavePayloadSchema,
+  SYSTEM_ONLY_EVENT_TYPES,
+  GATEWAY_LIFECYCLE_EVENT_TYPES,
+} from './gateway/schemas.js';

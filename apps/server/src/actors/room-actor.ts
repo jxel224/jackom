@@ -2,7 +2,7 @@ import type { EventSender, InboundEvent } from '../shared.js';
 import type { Deps } from '../types/deps.js';
 import type { RoomState, RoomPrivateState } from '../types/room-state.js';
 import { handleEvent } from '../fsm/transitions.js';
-import type { HandleEventResult } from '../fsm/result.js';
+import type { HandleEventResult, Rejection } from '../fsm/result.js';
 import type { RoomStateRepository } from '../persistence/room-state-repo.js';
 import type { RoomPrivateStateRepository } from '../persistence/room-private-state-repo.js';
 import type { RoomLookupRepository } from '../persistence/room-lookup-repo.js';
@@ -20,13 +20,30 @@ export interface RoomActorDeps {
   logger?: RoomLogger;
 }
 
+export interface LifecycleOutcome<T> {
+  room: RoomState;
+  priv: RoomPrivateState;
+  value: T;
+  rejected?: Rejection;
+}
+
 /**
  * One actor per room: an async queue that processes inbound events strictly one at a time
  * (ARCHITECTURE.md §7.1 MVP concurrency model — no distributed lock, because there is exactly one
  * process and exactly one queue per room). Loads lazily from Redis on first dispatch if not
- * already hydrated, persists only accepted (non-rejected) FSM results, and refreshes the TTLs of
+ * already hydrated, persists only accepted (non-rejected) results, and refreshes the TTLs of
  * everything tied to this room's lifetime (room state, roomCode lookup, host session, every player
  * session) on every accepted mutation.
+ *
+ * Two capabilities were added in Step 4 (the WebSocket gateway), both reusing the exact same
+ * queue/persist machinery as FSM event dispatch:
+ *  - `getOrLoadSnapshot()` — lets the gateway read a room's current state (e.g. to build a view
+ *    right after a reconnect) without needing to fabricate a fake FSM event just to trigger a load.
+ *  - `runLifecycle()` — lets the gateway run join/leave/profile-update (the pure functions in
+ *    fsm/room-lifecycle.ts, which are NOT part of the handleEvent() switch — see ARCHITECTURE.md
+ *    §9: "join/leave/setProfile mutate room.players directly, no transition") through the SAME
+ *    serialized queue and persistence path as everything else, so two players joining at the same
+ *    moment can never race on the room's player map.
  */
 export class RoomActor {
   private room: RoomState | null;
@@ -62,6 +79,17 @@ export class RoomActor {
     return this.room && this.priv ? { room: this.room, priv: this.priv } : null;
   }
 
+  /** Like getSnapshot(), but loads from the repositories first (via the queue) if not already hydrated. */
+  getOrLoadSnapshot(): Promise<{ room: RoomState; priv: RoomPrivateState }> {
+    if (this.loaded) {
+      return Promise.resolve({ room: this.room!, priv: this.priv! });
+    }
+    return this.runSerialized(async () => {
+      await this.ensureLoaded();
+      return { room: this.room!, priv: this.priv! };
+    });
+  }
+
   /**
    * Enqueues `event` behind whatever is already queued for this room, guaranteeing strictly
    * sequential processing — this is the serialization guarantee: every dispatch chains onto the
@@ -69,20 +97,7 @@ export class RoomActor {
    * (including its Redis persistence) has fully settled, no matter how close together they're invoked.
    */
   dispatch(event: InboundEvent, sender: EventSender): Promise<HandleEventResult> {
-    const task = this.queue.then(() => this.process(event, sender));
-    // Normalize to a resolved promise for queue-chaining purposes only, so one event's failure
-    // never breaks the chain for events queued behind it. The caller still receives `task` itself,
-    // which retains its real rejection/resolution.
-    this.queue = task.then(
-      () => undefined,
-      () => undefined,
-    );
-    return task;
-  }
-
-  private async process(event: InboundEvent, sender: EventSender): Promise<HandleEventResult> {
-    this.busy = true;
-    try {
+    return this.runSerialized(async () => {
       await this.ensureLoaded();
       const result = handleEvent(this.room!, this.priv!, event, sender, this.deps.fsmDeps);
 
@@ -95,6 +110,47 @@ export class RoomActor {
 
       this.lastActivityAt = this.deps.fsmDeps.now();
       return result;
+    });
+  }
+
+  /**
+   * Runs a pure room-lifecycle operation (join/leave/setProfile/kick — see fsm/room-lifecycle.ts)
+   * through the same serialized queue and persist-only-on-accept path as `dispatch()`. `op` must be
+   * a pure function of (room, priv, fsmDeps) — exactly the shape of the Step 2 lifecycle functions.
+   */
+  runLifecycle<T>(op: (room: RoomState, priv: RoomPrivateState, deps: Deps) => LifecycleOutcome<T>): Promise<LifecycleOutcome<T>> {
+    return this.runSerialized(async () => {
+      await this.ensureLoaded();
+      const outcome = op(this.room!, this.priv!, this.deps.fsmDeps);
+
+      if (!outcome.rejected) {
+        await this.persist(outcome.room, outcome.priv);
+        this.room = outcome.room;
+        this.priv = outcome.priv;
+      }
+
+      this.lastActivityAt = this.deps.fsmDeps.now();
+      return outcome;
+    });
+  }
+
+  /** Chains `work` onto the room's single queue and tracks the busy flag for its duration. */
+  private runSerialized<T>(work: () => Promise<T>): Promise<T> {
+    const task = this.queue.then(work);
+    // Normalize to a resolved promise for queue-chaining purposes only, so one failure never
+    // breaks the chain for work queued behind it. The caller still receives `task` itself, which
+    // retains its real rejection/resolution.
+    this.queue = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return this.trackBusy(task);
+  }
+
+  private async trackBusy<T>(task: Promise<T>): Promise<T> {
+    this.busy = true;
+    try {
+      return await task;
     } finally {
       this.busy = false;
     }
@@ -127,7 +183,7 @@ export class RoomActor {
    * Persists both halves. If the private-state write fails after the public-state write already
    * succeeded, best-effort deletes the just-written public half rather than leaving Redis with a
    * public/private mismatch — "do not silently continue with mismatched public/private state."
-   * Either way, a thrown error here means `process()` will NOT update this.room/this.priv, so the
+   * Either way, a thrown error here means the caller will NOT update this.room/this.priv, so the
    * actor's in-memory authoritative copy never drifts ahead of what's actually durable.
    */
   private async persist(room: RoomState, priv: RoomPrivateState): Promise<void> {
