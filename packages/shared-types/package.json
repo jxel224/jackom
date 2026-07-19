@@ -1,0 +1,9 @@
+{
+  "name": "@jackom/shared-types",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Types shared between the realtime server and (future) Next.js client. Imported via relative path from apps/server/src/shared.ts — see that file for why.",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}
