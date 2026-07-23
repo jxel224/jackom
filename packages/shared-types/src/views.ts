@@ -1,8 +1,8 @@
-import type { JsonValue } from './json.js';
-import type { PhaseInfo } from './phase.js';
-import type { MatchClock } from './match-clock.js';
-import type { PublicPlayerSummary } from './players.js';
-import type { Role, Winner } from './enums.js';
+import type { JsonValue } from './json';
+import type { PhaseInfo } from './phase';
+import type { MatchClock } from './match-clock';
+import type { PublicPlayerSummary } from './players';
+import type { Role, Winner } from './enums';
 
 /**
  * Explicit client-facing projections (ARCHITECTURE.md §8.6, §13 issue #5). These are the ONLY

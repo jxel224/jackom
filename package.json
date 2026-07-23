@@ -4,13 +4,17 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc -p packages/shared-types/tsconfig.json --noEmit && tsc -p apps/server/tsconfig.json --noEmit",
+    "typecheck": "tsc -p packages/shared-types/tsconfig.json --noEmit && tsc -p apps/server/tsconfig.json --noEmit && npm --prefix apps/web run typecheck",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "lint:web": "npm --prefix apps/web run lint"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/ws": "^8.18.1",
+    "jsdom": "^29.1.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

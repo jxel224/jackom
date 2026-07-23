@@ -1,4 +1,4 @@
-import type { JsonValue } from './json.js';
+import type { JsonValue } from './json';
 
 /**
  * Events accepted by the FSM (ARCHITECTURE.md §6, §9). In production these are constructed by the

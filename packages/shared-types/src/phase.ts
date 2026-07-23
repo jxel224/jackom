@@ -1,4 +1,4 @@
-import type { GameState } from './enums.js';
+import type { GameState } from './enums';
 
 export interface PhaseInfo {
   state: GameState;

@@ -1,5 +1,5 @@
-import type { JsonValue } from './json.js';
-import type { MatchClockMode } from './enums.js';
+import type { JsonValue } from './json';
+import type { MatchClockMode } from './enums';
 
 /** Distinct from per-phase timers (PhaseInfo) — see ARCHITECTURE.md §8.4. */
 export interface MatchClock {

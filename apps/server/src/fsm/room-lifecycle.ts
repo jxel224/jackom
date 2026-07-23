@@ -1,4 +1,4 @@
-import type { RoomConfig } from '../shared.js';
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type RoomConfig } from '../shared.js';
 import type { Deps } from '../types/deps.js';
 import type { Rejection } from './result.js';
 import type { RoomState, RoomPrivateState } from '../types/room-state.js';
@@ -15,11 +15,9 @@ import { initMatchClock } from './match-clock.js';
  * treat these as pure: the room/priv passed in is never mutated in place.
  */
 
-const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/I
-
 function generateRoomCode(deps: Deps): string {
   let code = '';
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
     code += ROOM_CODE_ALPHABET[Math.floor(deps.rng() * ROOM_CODE_ALPHABET.length)];
   }
   return code;

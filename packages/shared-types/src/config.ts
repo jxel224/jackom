@@ -1,4 +1,4 @@
-import type { CorruptionRevealPolicy, SpecialGameInsertionPoint, TieBreakRule } from './enums.js';
+import type { CorruptionRevealPolicy, SpecialGameInsertionPoint, TieBreakRule } from './enums';
 
 /**
  * Config values that select an *algorithm* are stored as rule-id strings, never as functions,

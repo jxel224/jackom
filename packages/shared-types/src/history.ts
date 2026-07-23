@@ -1,4 +1,4 @@
-import type { JsonValue } from './json.js';
+import type { JsonValue } from './json';
 
 /** Completed, resolved records only — append-only, never mutated after push (ARCHITECTURE.md §8.5). */
 export interface RoundRecord {

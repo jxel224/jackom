@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/*
+ * Centralized design tokens (ARCHITECTURE: Development Step 6 — design-system foundation).
+ * Every custom color/size/shadow the app uses is declared exactly once here, as a Tailwind v4
+ * `@theme` variable, which automatically generates the matching utility class (`--color-surface-1`
+ * -> `bg-surface-1`/`text-surface-1`/`border-surface-1`, `--text-tv-lg` -> `text-tv-lg`, etc.).
+ * Components must reach for these utilities instead of hardcoding hex colors or arbitrary pixel
+ * values inline.
+ */
+@theme {
+  /* Backgrounds — dark-first, so a shared TV screen stays legible in a dim living room. */
+  --color-surface-0: #100e1f; /* page background */
+  --color-surface-1: #1b1833; /* card / panel background */
+  --color-surface-2: #262146; /* raised panel / hover background */
+
+  /* Text hierarchy */
+  --color-ink: #f7f5ff; /* primary text on dark surfaces */
+  --color-ink-muted: #b3aed1; /* secondary text */
+  --color-ink-subtle: #8a83ab; /* tertiary / placeholder text */
+
+  /* Brand + accents — playful violet as the brand color, warm coral as the energetic action color. */
+  --color-brand: #8b5cf6;
+  --color-brand-strong: #7c3aed;
+  --color-action: #fb7185;
+  --color-action-strong: #f43f5e;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+
+  /* Borders */
+  --color-border: #322b57;
+  --color-border-strong: #433a72;
+
+  /* Arabic-first font stack — `--font-sans` overrides Tailwind's default `font-sans` utility, and
+   * next/font's generated `--font-cairo` variable (set on <html> in app/layout.tsx) fills in the
+   * actual font files. */
+  --font-sans: var(--font-cairo), ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+
+  /* TV-safe typography — legible from across a room. Regular Tailwind text-* sizes remain
+   * available for mobile/dense UI; these are for anything shown on the shared host screen. */
+  --text-tv-sm: 1.375rem;
+  --text-tv-sm--line-height: 1.4;
+  --text-tv-base: 1.875rem;
+  --text-tv-base--line-height: 1.35;
+  --text-tv-lg: 2.75rem;
+  --text-tv-lg--line-height: 1.2;
+  --text-tv-xl: 4rem;
+  --text-tv-xl--line-height: 1.1;
+
+  /* Touch-friendly control sizing for phone controllers (WCAG 2.5.5-ish 48px minimum). */
+  --spacing-control: 3rem;
+
+  /* One soft "glow" shadow for primary/energetic actions — used sparingly, not on every element. */
+  --shadow-glow: 0 8px 30px -6px color-mix(in oklab, var(--color-brand) 55%, transparent);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-surface-0);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Visible, consistent focus ring for keyboard users — RTL-safe since outline isn't directional. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
+  ::selection {
+    background-color: var(--color-brand);
+    color: var(--color-ink);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

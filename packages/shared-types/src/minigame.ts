@@ -1,5 +1,5 @@
-import type { JsonValue } from './json.js';
-import type { Role } from './enums.js';
+import type { JsonValue } from './json';
+import type { Role } from './enums';
 
 /**
  * Shared mini-game plugin interface — both regular mini-games and the special seventh game

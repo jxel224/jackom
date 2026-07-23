@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from './enums.js';
+import type { ConnectionStatus } from './enums';
 
 export interface PlayerPublic {
   playerId: string;

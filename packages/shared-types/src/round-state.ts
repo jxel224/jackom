@@ -1,4 +1,4 @@
-import type { JsonValue } from './json.js';
+import type { JsonValue } from './json';
 
 /**
  * Active (in-progress) round/vote state, kept separate from completed history records
