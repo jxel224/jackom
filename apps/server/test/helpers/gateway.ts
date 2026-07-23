@@ -5,6 +5,8 @@ import { buildRepos } from './persistence.js';
 import { RoomActorManager } from '../../src/actors/room-actor-manager.js';
 import { GatewayServer, type GatewayOptions } from '../../src/gateway/gateway-server.js';
 import type { WireMessage } from '../../src/gateway/types.js';
+import { PhaseTimerService } from '../../src/timers/phase-timer-service.js';
+import { FakeTimerScheduler } from '../../src/timers/fake-timer-scheduler.js';
 
 export interface TestGatewaySetup {
   server: GatewayServer;
@@ -36,6 +38,51 @@ export async function startTestGateway(options: GatewayOptions = {}, depsOverrid
     manager,
     repos,
     deps,
+    close: () => server.close(),
+  };
+}
+
+export interface TestGatewayWithTimersSetup extends TestGatewaySetup {
+  /** The FakeTimerScheduler PhaseTimerService constructed internally — advance it with `advanceTo()`/`fireNow()`. */
+  scheduler: FakeTimerScheduler;
+  timerService: PhaseTimerService;
+}
+
+/** Same as `startTestGateway`, but also wires a Development-Step-5 `PhaseTimerService` (backed by a deterministic `FakeTimerScheduler`) into the gateway's broadcast boundary, exactly as production wiring would. */
+export async function startTestGatewayWithTimers(options: GatewayOptions = {}, depsOverride?: Deps, seed = 1): Promise<TestGatewayWithTimersSetup> {
+  const deps = depsOverride ?? createTestDeps(seed);
+  const repos = buildRepos(deps);
+  const manager = new RoomActorManager({
+    fsmDeps: deps,
+    roomStateRepo: repos.roomStateRepo,
+    roomPrivateStateRepo: repos.roomPrivateStateRepo,
+    roomLookupRepo: repos.roomLookupRepo,
+    sessionRepo: repos.sessionRepo,
+  });
+
+  let scheduler!: FakeTimerScheduler;
+  const timerService = new PhaseTimerService({
+    manager,
+    now: deps.now,
+    createScheduler: (onExpire) => {
+      scheduler = new FakeTimerScheduler(onExpire);
+      return scheduler;
+    },
+  });
+
+  const server = new GatewayServer(
+    { roomActorManager: manager, roomLookupRepo: repos.roomLookupRepo, sessionRepo: repos.sessionRepo, fsmDeps: deps, timerService },
+    { authTimeoutMs: 3000, heartbeatIntervalMs: 60_000, ...options },
+  );
+  const port = await server.listen(0);
+  return {
+    server,
+    port,
+    manager,
+    repos,
+    deps,
+    scheduler,
+    timerService,
     close: () => server.close(),
   };
 }

@@ -5,6 +5,7 @@ import type { Deps } from '../types/deps.js';
 import type { RoomActorManager } from '../actors/room-actor-manager.js';
 import type { RoomLookupRepository } from '../persistence/room-lookup-repo.js';
 import type { SessionRepository } from '../persistence/session-repo.js';
+import type { PhaseTimerService } from '../timers/phase-timer-service.js';
 import { RoomConsistencyError } from '../persistence/errors.js';
 import { noopRoomLogger, type RoomLogger } from '../persistence/logging.js';
 import { DEFAULT_ROOM_TTL_SECONDS } from '../persistence/config.js';
@@ -39,6 +40,14 @@ export interface GatewayDeps {
   roomLookupRepo: RoomLookupRepository;
   sessionRepo: SessionRepository;
   fsmDeps: Deps;
+  /**
+   * Optional Development Step 5 integration: if provided, the gateway wires itself in as this
+   * service's broadcast boundary (`setOnRoomMutated`), so a timer-driven `timer:expired`
+   * transition sends the exact same `view:tv`/`view:player` payloads as any client-originated
+   * action, via `broadcastRoom()` below. The timer service itself never sees a `WireMessage` or a
+   * `WebSocket` — it only ever calls back with a `roomId`.
+   */
+  timerService?: PhaseTimerService;
 }
 
 export interface GatewayOptions {
@@ -106,6 +115,11 @@ export class GatewayServer {
   constructor(private readonly deps: GatewayDeps, options: GatewayOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.logger = options.logger ?? noopRoomLogger;
+    // The callback boundary from Development Step 5: the timer service knows nothing about
+    // WireMessage/WebSocket, it just calls back with a roomId once a timer-driven mutation is
+    // accepted and persisted — broadcastRoom() below is the exact same path every client-originated
+    // mutation already uses.
+    this.deps.timerService?.setOnRoomMutated((roomId) => this.broadcastRoom(roomId));
   }
 
   /** Starts listening on `port` (0 = ephemeral) and returns the actually-bound port. */
@@ -134,6 +148,7 @@ export class GatewayServer {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+    this.deps.timerService?.shutdown();
     for (const ws of this.sockets.keys()) {
       try {
         ws.close(1001, 'Server shutting down');
@@ -517,7 +532,8 @@ export class GatewayServer {
 
   // ---- View broadcasting ----------------------------------------------------------------------
 
-  private async broadcastRoom(roomId: string): Promise<void> {
+  /** Public so `PhaseTimerService`'s broadcast callback (wired above) can reuse this exact path — never re-implemented at the timer layer. */
+  async broadcastRoom(roomId: string): Promise<void> {
     const actor = this.deps.roomActorManager.get(roomId);
     let snapshot;
     try {

@@ -18,6 +18,14 @@ export interface RoomActorDeps {
   sessionRepo: SessionRepository;
   ttlSeconds: number;
   logger?: RoomLogger;
+  /**
+   * Fired synchronously after every ACCEPTED mutation (dispatch or lifecycle op), with the
+   * resulting room. This is the integration point Development Step 5's `PhaseTimerService` uses to
+   * keep the room's phase timer in sync (`RoomActorManager.setLifecycleHooks`) without RoomActor
+   * itself knowing anything about timers. A throwing callback is caught and logged, never allowed
+   * to fail the mutation it's reacting to.
+   */
+  onMutated?: (room: RoomState) => void;
 }
 
 export interface LifecycleOutcome<T> {
@@ -105,6 +113,7 @@ export class RoomActor {
         await this.persist(result.room, result.priv);
         this.room = result.room;
         this.priv = result.priv;
+        this.notifyMutated(result.room);
       }
       // Rejections are deliberately NOT persisted — this.room/this.priv stay exactly as they were.
 
@@ -127,6 +136,7 @@ export class RoomActor {
         await this.persist(outcome.room, outcome.priv);
         this.room = outcome.room;
         this.priv = outcome.priv;
+        this.notifyMutated(outcome.room);
       }
 
       this.lastActivityAt = this.deps.fsmDeps.now();
@@ -153,6 +163,15 @@ export class RoomActor {
       return await task;
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** Best-effort notification — a throwing/misbehaving hook must never fail the mutation it's reacting to. */
+  private notifyMutated(room: RoomState): void {
+    try {
+      this.deps.onMutated?.(room);
+    } catch {
+      this.logger({ roomId: room.roomId, event: 'on_mutated_failed' });
     }
   }
 

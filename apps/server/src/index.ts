@@ -68,7 +68,7 @@ export type { SessionRepository, PlayerSessionRecord, HostSessionRecord } from '
 export { RoomActor } from './actors/room-actor.js';
 export type { RoomActorDeps, LifecycleOutcome } from './actors/room-actor.js';
 export { RoomActorManager } from './actors/room-actor-manager.js';
-export type { RoomActorManagerDeps, CreatedRoomHandle } from './actors/room-actor-manager.js';
+export type { RoomActorManagerDeps, CreatedRoomHandle, RoomActorLifecycleHooks } from './actors/room-actor-manager.js';
 
 // ---- Step 4: WebSocket gateway ------------------------------------------------------------------
 
@@ -87,3 +87,11 @@ export {
   SYSTEM_ONLY_EVENT_TYPES,
   GATEWAY_LIFECYCLE_EVENT_TYPES,
 } from './gateway/schemas.js';
+
+// ---- Step 5: server-owned phase timer scheduler --------------------------------------------------
+
+export type { TimerScheduler, TimerSchedulerFactory, TimerExpiryCallback, ScheduledTimerInfo } from './timers/types.js';
+export { RealTimerScheduler } from './timers/real-timer-scheduler.js';
+export { FakeTimerScheduler } from './timers/fake-timer-scheduler.js';
+export { PhaseTimerService } from './timers/phase-timer-service.js';
+export type { PhaseTimerServiceDeps } from './timers/phase-timer-service.js';
