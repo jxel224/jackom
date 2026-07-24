@@ -34,13 +34,19 @@ export interface CreateRoomResponseBody {
   tv: TvView;
 }
 
-/** GET /api/rooms/:roomCode response — minimal public availability info, no roster/private content. */
+/**
+ * GET /api/rooms/:roomCode response — minimal public availability info, no roster/private content.
+ * `minPlayers` (Step 7B) lets the TV lobby show an accurate "needs N more players" disabled state
+ * for the start button — a UX affordance only; the server remains the sole authority (`host:startGame`
+ * is still validated by the FSM regardless of what the frontend chooses to disable).
+ */
 export interface RoomAvailabilityResponseBody {
   roomCode: string;
   joinable: boolean;
   full: boolean;
   matchStarted: boolean;
   playerCount: number;
+  minPlayers: number;
   maxPlayers: number;
 }
 

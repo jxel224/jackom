@@ -211,6 +211,7 @@ export class HttpApiServer {
 
     const room = await this.loadRoom(roomId);
     const playerCount = getPlayerCount(room);
+    const minPlayers = room.config.rules.minPlayers;
     const maxPlayers = room.config.rules.maxPlayers;
     const matchStarted = room.phase.state !== 'LOBBY' && room.phase.state !== 'REMATCH_LOBBY';
     const full = playerCount >= maxPlayers;
@@ -221,6 +222,7 @@ export class HttpApiServer {
       full,
       matchStarted,
       playerCount,
+      minPlayers,
       maxPlayers,
     };
     this.sendJson(res, 200, body);

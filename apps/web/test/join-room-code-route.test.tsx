@@ -49,20 +49,20 @@ describe('/join/[roomCode] reads the route param safely', () => {
   });
 
   it('18/normalizes a lowercase, valid code before checking availability', async () => {
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
     await renderRoute('ab23xy');
     await waitFor(() => expect(mockedGetRoomAvailability).toHaveBeenCalledWith('AB23XY'));
     expect(await screen.findByLabelText('اسمك')).toBeTruthy();
   });
 
   it('trims surrounding whitespace from the param before checking availability', async () => {
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
     await renderRoute('  AB23XY  ');
     await waitFor(() => expect(mockedGetRoomAvailability).toHaveBeenCalledWith('AB23XY'));
   });
 
   it('shows an Arabic "unavailable" message when the room exists but is not joinable', async () => {
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: false, full: true, matchStarted: false, playerCount: 12, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'AB23XY', joinable: false, full: true, matchStarted: false, playerCount: 12, minPlayers: 5, maxPlayers: 12 });
     await renderRoute('AB23XY');
     expect(await screen.findByText('الغرفة ممتلئة.')).toBeTruthy();
   });

@@ -1,6 +1,6 @@
-# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6 & 7A
+# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A & 7B
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), and 7A (real room create/join HTTP API + frontend integration) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or a real WebSocket client were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), and 7B (browser WebSocket client + real-time lobby) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
 
 > **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
@@ -891,3 +891,211 @@ npm --prefix apps/web run build   # succeeds, all 7 routes compile (5 static, 1 
 - **Tests**: complete — all 27 required verification points, 297 passing + 1 correctly-skipped (pre-existing, unrelated to this step).
 - **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
 - Browser WebSocket client, live lobby updates, host start-game, QR generation, gameplay screens, authentication, payments, PostgreSQL, Prisma, AWS deployment, and Redis schema changes were intentionally **not** started, per the requested scope.
+
+---
+
+# Step 7B — Browser WebSocket Client and Real-Time Lobby
+
+## Repository state before starting
+
+Verified clean at `4bb551c` ("feat(server): add room create and join api", HEAD, matching Step 7A's completion commit) before any Step 7B work began — `git status` showed no uncommitted changes and `git log` confirmed the expected history (`4bb551c` → `c6972fb` → `9cff682` → `b5a3a4f` → `909bb67`).
+
+## Files created
+
+```
+D:\projects\jackom\
+  apps/web/
+    package.json                       # +qrcode dependency, +@types/qrcode devDependency
+
+    lib/realtime/
+      wire-schemas.ts                  # NEW — small, dedicated frontend zod schemas mirroring the
+                                        # gateway's wire format (envelope, error payload, TvView/
+                                        # PlayerView/PrivatePlayerPayload — validates only the fields
+                                        # this lobby-only UI actually renders, z.unknown()/.passthrough()
+                                        # for the rest; see the file's own comment for why this doesn't
+                                        # duplicate packages/shared-types or add a cross-package zod dep)
+      types.ts                         # REWRITTEN — ConnectionState is now the real 8-state union
+                                        # ('idle'|'connecting'|'authenticating'|'connected'|
+                                        # 'reconnecting'|'disconnected'|'unauthorized'|'failed'),
+                                        # replacing Step 6's placeholder SocketConnectionState
+      connection-status.ts             # NEW — describeConnectionState(): one Arabic label + visual
+                                        # tone per ConnectionState, shared by both lobbies
+      realtime-socket.ts               # NEW — RealtimeSocket, the one place raw WebSocket code lives
+      useHostRealtime.ts               # NEW — host connection hook (view:tv, startGame())
+      usePlayerRealtime.ts             # NEW — player connection hook (view:player, privateInfo)
+      index.ts                         # REWRITTEN barrel — exports the above plus the Step 6 types
+
+    components/
+      ui/QrCode.tsx                     # NEW — client-side QR generation via the `qrcode` package
+      tv-lobby.tsx                      # NEW — the real, live host lobby
+      player-lobby.tsx                  # NEW — the real, live player lobby
+      post-lobby-placeholder.tsx        # NEW — shared, static, non-interpretive post-LOBBY screen
+
+    test/
+      helpers/realtime-server.ts        # NEW — boots a REAL GatewayServer (reusing apps/server's own
+                                        # test helpers) for WebSocket-client tests to connect a REAL
+                                        # WebSocket to; seedRoom() persists a room (+ optional
+                                        # pre-joined players) directly via the repositories
+      lib/realtime/
+        realtime-socket.test.ts         # NEW — protocol-level tests against the real GatewayServer
+        realtime-socket-backoff.test.ts # NEW — backoff/cap/jitter/reset + online/offline, fake WebSocket
+        realtime-hooks.test.tsx         # NEW — useHostRealtime/usePlayerRealtime, mocked RealtimeSocket
+      components/
+        tv-lobby.test.tsx               # NEW — mocked useHostRealtime
+        player-lobby.test.tsx           # NEW — mocked usePlayerRealtime
+        qr-code.test.tsx                # NEW — mocked `qrcode` package
+        post-lobby-placeholder.test.tsx # NEW
+```
+
+## Files changed
+
+```
+  packages/shared-types/src/http-api.ts       # RoomAvailabilityResponseBody gained `minPlayers: number`
+                                               # (TvLobby's start-button UX needs it; the server remains
+                                               # the sole authority over whether a start is actually
+                                               # accepted, regardless of what this disables client-side)
+  apps/server/src/http/http-api-server.ts     # handleGetRoomAvailability now returns minPlayers
+  apps/server/test/http/room-availability.test.ts  # updated assertion for the new field
+
+  apps/web/lib/env.ts                          # +NEXT_PUBLIC_WEB_BASE_URL (QR join-link base only —
+                                               # never sent to the server, never contains a token)
+  apps/web/components/ui/index.ts              # +QrCode export
+  apps/web/app/tv/page.tsx                     # 'ready' state now renders <TvLobby> (real, live)
+                                               # instead of Step 7A's static "coming soon" placeholder
+  apps/web/components/join-room-form.tsx       # +'checking-session' phase (restores an already-joined
+                                               # session on refresh instead of re-running the join flow);
+                                               # 'joined' phase now renders <PlayerLobby> (real, live)
+
+  apps/web/test/api-client.test.ts             # +minPlayers in mocked availability responses
+  apps/web/test/join-room-code-route.test.tsx  # +minPlayers (3 occurrences)
+  apps/web/test/join-room-form.test.tsx        # +minPlayers; +2 new tests for 'checking-session'
+                                               # restoration (same room vs. a different room)
+  apps/web/test/tv-page.test.tsx               # 2 of the 4 existing tests REWRITTEN — Step 7A's
+                                               # assertions against static "coming soon" text no longer
+                                               # apply now that a real TvLobby renders; see "Tests added"
+```
+
+## WebSocket client architecture chosen
+
+A framework-agnostic core class, `RealtimeSocket` (`lib/realtime/realtime-socket.ts`), wrapped by two thin React hooks (`useHostRealtime`/`usePlayerRealtime`). This is the one place in the frontend that touches the raw `WebSocket` API — no page or component ever constructs a socket directly. `RealtimeSocket` owns: building the URL (`{wsBaseUrl}/{host|play}/{roomCode}`) from a validated `wsBaseUrl` the caller supplies, opening/closing the connection, sending the auth message first, safely parsing/validating every inbound message before handing it to the caller, exposing an 8-state `ConnectionState` via an `onStateChange` callback, capped-exponential-backoff-with-jitter reconnection, and online/offline handling. It knows nothing about React, TvView/PlayerView rendering, or session storage — those are the hooks' job. This split is what let the protocol-level tests (`realtime-socket.test.ts`) exercise the real class against a real `GatewayServer` with zero React/DOM involved, and let the hook tests (`realtime-hooks.test.tsx`) exercise the React wiring with the transport entirely mocked out — two genuinely independent test surfaces instead of one that has to fake both at once.
+
+`useHostRealtime`/`usePlayerRealtime` each own exactly one `RealtimeSocket` instance per mounted session, via `useRef` (never re-created on re-render) constructed inside a `useEffect` keyed on the session's **primitive fields** (`session?.roomCode`, `session?.hostSessionToken`/`playerSessionToken`) rather than the session object's reference identity — this is what makes the effect correctly a no-op across ordinary re-renders and correctly re-run only on a genuine session change, and what makes React Strict Mode's dev-only double-invocation safe: the effect's cleanup (`socket.close()`) runs between the two invocations, and `RealtimeSocket` itself guards every event handler with a `this.ws !== socket` staleness check, so a stale first-invocation socket's late-arriving events can never leak into the second invocation's state.
+
+## Auth-first-message implementation
+
+`RealtimeSocket.openSocket()` attaches its `'open'` listener before anything else, and that listener's ONLY job is to call `this.options.buildAuthMessage()` and send the result — nothing else can run between the socket opening and that send, because the listener body is synchronous. `useHostRealtime` supplies `buildAuthMessage: () => ({ type: 'host:reconnect', payload: { hostSessionToken: session.hostSessionToken } })`; `usePlayerRealtime` supplies `buildAuthMessage: () => ({ type: 'player:reconnect', payload: { sessionToken: session.playerSessionToken } })` — the exact existing gateway reconnect events from Step 4, unchanged. **`player:join` is never sent by this client layer at all** — Step 7A's HTTP API remains the only path that ever registers a new player; the WebSocket layer only ever re-authenticates an identity that already exists. This is verified directly: `realtime-socket.test.ts` test "8. connecting via WebSocket (player:reconnect) never creates a duplicate player" seeds one player via the repositories, connects via WS, and asserts the persisted room still has exactly one player afterward.
+
+## Host/player session restoration
+
+- **TV**: unchanged from Step 7A's `checking-session`/`no-session`/`loading`/`error` flow (`app/tv/page.tsx`) — only the terminal `'ready'` branch changed, from static placeholder JSX to `<TvLobby session={...} minPlayers={...} maxPlayers={...} />`, which itself calls `useHostRealtime(session)` and authenticates via `host:reconnect` using the stored `hostSessionToken`.
+- **Player**: `JoinRoomForm` gained a new initial `'checking-session'` phase (`components/join-room-form.tsx`) that reads `loadPlayerSession()` and, if an existing session matches the CURRENT room code, skips straight to rendering `<PlayerLobby session={existing} />` — never re-running the availability check or the join flow. A session for a *different* room code does not leak in; the normal flow runs as if no session existed (verified by a dedicated test). `PlayerLobby` itself then authenticates via `player:reconnect` using the stored `playerSessionToken`.
+
+Both restore the SAME identity on every reconnect — never a new player, never a new room. `realtime-socket.test.ts` test "16" simulates a browser refresh (closing one `RealtimeSocket` instance, constructing a brand-new one with the same stored token, exactly like a fresh page load would) and confirms it reconnects and authenticates correctly as the same player.
+
+## Reconnection / backoff strategy
+
+Capped exponential backoff with jitter, implemented in `RealtimeSocket.scheduleReconnect()`: `delay = min(10_000ms, 500ms × 1.8^attempt) ± 20% random jitter`, `attempt` incrementing on every scheduled retry and resetting to `0` on the next successful `host:authenticated`/`player:reconnected` ack. Verified in `realtime-socket-backoff.test.ts` (using a fake `WebSocket` implementation injected via `RealtimeSocket`'s test-only `webSocketImpl` option, plus `vi.useFakeTimers()`, so nothing in this test file waits in real time):
+
+- Delay grows within the exact computed `[min, max]` bounds for consecutive attempt indices 0 and 1.
+- Delay never exceeds the `MAX_DELAY_MS` cap (`± jitter`), verified across 8 consecutive failures where an uncapped formula would already be in the tens of seconds.
+- A successful connection resets the attempt counter — the NEXT disconnect's delay is back at attempt-0 bounds, not continuing to grow.
+- After `maxConsecutiveFailures` consecutive failures, automatic reconnection stops entirely and the state becomes `'failed'` with the Arabic message "تعذر الاتصال بالخادم." — and stays stopped (no further attempts) until `retry()` is called explicitly (the "إعادة المحاولة" button).
+- An `'unauthorized'` state (session rejected — `SESSION_INVALID`/`SESSION_ROOM_MISMATCH`) also stops automatic reconnection immediately, independent of the failure counter — a bad/expired session is never worth retrying automatically (verified in `realtime-socket.test.ts`).
+- `navigator.onLine === false` short-circuits `scheduleReconnect()` into a `'disconnected'`/`OFFLINE` state without burning an attempt; a `window` `'online'` event triggers an immediate reconnection attempt (bypassing the backoff timer) if the socket isn't already open; a `window` `'offline'` event immediately reflects the offline state. Both listeners are attached on `connect()`/`retry()` and detached on `close()` — no leak across unmounts.
+- `RealtimeSocket.close()` is terminal: cancels any pending reconnect timer, detaches the online/offline listeners, and closes the socket — called from every hook's `useEffect` cleanup, so unmounting mid-connection (or mid-backoff-wait) never leaves a dangling timer or a socket that later resurrects stale state into an unmounted component.
+
+## TV lobby implementation
+
+`components/tv-lobby.tsx`, rendered by `/tv` once a host session and its one-time `minPlayers`/`maxPlayers` availability check both exist. Shows: the real room code (`RoomCodeDisplay`, always from the stored session, never a placeholder), a QR panel (real QR if `NEXT_PUBLIC_WEB_BASE_URL` is configured, an honest text fallback otherwise — see "QR implementation" below), a live player roster built directly from `TvView.players` (name, avatar, per-player connection-status badge — "متصل"/"غير نشط"/"غير متصل", never color-only), a live player count, a connection-status badge (`describeConnectionState`, `aria-live="polite"`), and the "ابدأ اللعبة" button. An `'unauthorized'` connection clears the stored host session and shows a link back home instead of any lobby content. A `'failed'`/`'disconnected'` state shows the specific error message plus a manual "إعادة المحاولة" button. Once the server's view reports a phase other than `LOBBY`, the roster/QR/start-button section is replaced entirely by `PostLobbyPlaceholder`.
+
+## Player phone lobby implementation
+
+`components/player-lobby.tsx`, rendered once a player session exists (fresh join or restored). Shows: a join confirmation with the display name ("أهلًا، سارة!" / "تم انضمامك إلى الغرفة {code}."), the connection-status badge, the current total player count once `PlayerView` provides it (`others.length + 1`), the waiting instruction ("انتظر المضيف لبدء اللعبة."), and — on failure/disconnection — the specific error message plus a manual retry button. An `'unauthorized'` connection clears the stored player session and shows "انتهت الجلسة، انضم من جديد." with a link back to `/join`. Never renders another player's name/status, the host's session, or any private role/vote content — `PlayerView`/`PrivatePlayerPayload` isolation is structural (see below), not a UI-level filter. Once the phase leaves `LOBBY`, the whole panel is replaced by the shared `PostLobbyPlaceholder`.
+
+## Live player update behavior
+
+Entirely server-driven, unchanged gateway mechanics: a player's `RealtimeSocket` authenticating via `player:reconnect` triggers the SAME existing gateway path Step 4 already built (session resolve → room-match check → socket bind → synthesized `player:reconnected` FSM event → `connectionStatus` flips to `'connected'` → `broadcastRoom()`), and a socket closing triggers the SAME existing disconnect path (`player:disconnected`). The frontend does nothing but render whatever `TvView`/`PlayerView` the server sends after each of those transitions. Verified end-to-end against a REAL `GatewayServer` in `realtime-socket.test.ts`: connecting one, then a second, live player socket produces a `TvView` roster showing both as `'connected'`; disconnecting and reconnecting the same player's socket leaves the room with exactly one player (never a duplicate) whose status returns to `'connected'`; each player's `PlayerView` correctly identifies only themselves as `self` and never receives another player's `PrivatePlayerPayload`.
+
+## QR implementation
+
+`components/ui/QrCode.tsx`, using the `qrcode` npm package (small, actively maintained, MIT-licensed) — generates a PNG data URL client-side (`QRCode.toDataURL`) and renders it as a plain `<img>` (never `dangerouslySetInnerHTML`), with an animated placeholder while generating and a clear Arabic text fallback ("تعذر إنشاء رمز QR") on failure, never a broken image. `TvLobby` builds the encoded value itself — `{NEXT_PUBLIC_WEB_BASE_URL}/join/{roomCode}`, using the SAME normalized room code shown in `RoomCodeDisplay`, validated through the existing `env.ts` boundary — and passes only that URL string to `QrCode`; the component has no knowledge of sessions/tokens/playerIds, so there is nothing to leak even by mistake. If `NEXT_PUBLIC_WEB_BASE_URL` isn't configured, the QR panel shows the same visible-room-code fallback text instead of guessing at a base URL. The `<img>` always carries accessible `alt` text containing the full join URL. Verified directly: `qr-code.test.tsx` mocks the `qrcode` package and asserts the value passed to `toDataURL` is exactly the caller-supplied URL — never a token or playerId.
+
+## Host start behavior
+
+`useHostRealtime.startGame()` reads the CURRENT `phase.phaseId` from the latest received `TvView` (via a ref kept in sync by its own `useEffect`, never read/written during render) and sends the exact existing `host:startGame {phaseId}` event through `RealtimeSocket.send()` — into the real gateway, into the real `RoomActor.dispatch()`, through the real FSM. The frontend never transitions itself: `startPending` becomes `true` immediately (loading state on the button) and only clears once the NEXT `view:tv` or an `error:actionRejected` arrives — an accepted start moves the room's real phase off `LOBBY`, which `TvLobby` detects and swaps to `PostLobbyPlaceholder`; a rejected start (e.g. not enough players by the time it's processed) surfaces the server's own message via `ErrorMessage` and re-enables the button. The button's `disabled` state is driven by `minPlayers`/`maxPlayers` from Step 7A's availability check purely for UX — this is explicitly never treated as authoritative; the server's own FSM guard is what actually accepts or rejects the event regardless of what the button shows.
+
+## How RoomActor authority is preserved
+
+No line of frontend or gateway code changed how `RoomActor`/the FSM work. Every event this client layer ever sends (`host:reconnect`, `player:reconnect`, `host:startGame`) is one of the gateway's existing, unchanged wire message types, routed through the exact same `RoomActor.dispatch()` path every other step's tests already exercise. The client's own zod schemas (`wire-schemas.ts`) validate only what's RECEIVED and rendered — they impose no new constraint on what the server accepts, and nothing in the client can call the FSM directly, mutate `RoomState`, or bypass `RoomActor`.
+
+## How private payload isolation is preserved
+
+Structural, not a UI-level filter. `PrivatePlayerPayload` only ever reaches a socket that is (a) authenticated as that specific player and (b) connected to `/play/{roomCode}` — the host's `TvView` never contains it (verified directly: `realtime-socket.test.ts` test "13" connects a host to a room with a joined player and asserts no `player:privateRoleInfo` envelope is ever received on the host connection), and `usePlayerRealtime` scopes `privateInfo` to its own single `RealtimeSocket` instance, clearing it on session change, on `'unauthorized'`, and on unmount — it is never cached globally, never written to `localStorage`, and never logged. (In the LOBBY-only scope this step covers, roles don't exist yet, so `privateInfo` is always `null` in practice today — the isolation mechanism is built and tested regardless, ready for the phase after LOBBY.)
+
+## Gateway changes
+
+**None.** Every WebSocket message type, close code (`4000`/`4001`/`4002`/`4003`), auth flow, and broadcast path this step relies on already existed, unchanged, from Step 4/5. The only backend change at all was the small, HTTP-only `minPlayers` DTO addition described above (`packages/shared-types/src/http-api.ts` + `apps/server/src/http/http-api-server.ts`) — it does not touch the WebSocket gateway, `RoomActor`, or the FSM in any way.
+
+## Tests added
+
+**60 new/changed tests across 7 new files, plus 2 rewritten tests in an existing file and 2 new tests in another:**
+
+- `realtime-socket.test.ts` (12 tests) — protocol-level, against a REAL `GatewayServer` + a REAL WebSocket client (`ws`'s own client, injected via `RealtimeSocket`'s test-only `webSocketImpl` option — see the jsdom/undici note below): host/player auth via the exact existing reconnect events, invalid-session rejection, no duplicate player created via WS, PrivatePlayerPayload never reaching the host, live multi-player TvView updates, personalized PlayerView isolation, disconnect/reconnect restoring the same player, a simulated browser-refresh reconnect, duplicate-socket replacement, and unauthorized-stops-auto-reconnect-until-manual-retry.
+- `realtime-socket-backoff.test.ts` (6 tests) — backoff growth/cap/jitter-bounds/reset-on-success, max-consecutive-failures terminal state, and offline/online handling — a fake `WebSocket` + `vi.useFakeTimers()`, no real waiting time anywhere.
+- `realtime-hooks.test.tsx` (13 tests) — `useHostRealtime`/`usePlayerRealtime` with `RealtimeSocket` mocked entirely: auth message construction, state/view wiring, `startGame()`/rejection handling, private-info isolation and clearing (unauthorized, unmount), session-change socket replacement, unmount cleanup, and the `NEXT_PUBLIC_WS_URL`-unconfigured failure path.
+- `components/tv-lobby.test.tsx` (8 tests) / `components/player-lobby.test.tsx` (7 tests) — with the realtime hooks mocked: real room code + waiting state, live roster with visible (non-color-only) status, start-button min-player gating, rejected-start error display, post-lobby placeholder swap, unauthorized session-clearing, manual retry.
+- `components/qr-code.test.tsx` (2 tests) / `components/post-lobby-placeholder.test.tsx` (1 test).
+- `tv-page.test.tsx` — 2 of the 4 pre-existing tests were REWRITTEN (not merely patched): Step 7A's assertions against a static "coming soon" placeholder and a one-time `playerCount` snapshot no longer describe real behavior now that a live `TvLobby` renders. Replaced with (a) a test that mocks `useHostRealtime` to prove `TvPage` correctly wires the session/`minPlayers`/`maxPlayers` props down into the real `TvLobby` (live-roster behavior itself is covered by `tv-lobby.test.tsx`, not duplicated here), and (b) a test verifying the REAL, unmocked failure path when `NEXT_PUBLIC_WS_URL` is genuinely unconfigured — a clear `'failed'` state, never a silent false "live" claim.
+- `join-room-form.test.tsx` — 2 new tests: a stored session for the CURRENT room restores the lobby directly without re-checking availability or re-joining; a stored session for a DIFFERENT room does not leak in and the normal join flow runs.
+
+**A note on `jsdom` and the WebSocket client**: `realtime-socket.test.ts` and `realtime-socket-backoff.test.ts` deliberately run in Vitest's plain `"node"` environment (no `@vitest-environment jsdom` pragma) rather than jsdom. Node's own native `WebSocket` (undici-based) intermittently crashes when combined, in the same process, with a gateway server built on the `ws` package — an internal undici `Event`-instanceof mismatch, unrelated to anything in this project's own code. `realtime-socket.test.ts` sidesteps it by injecting `ws`'s own client (via the same `webSocketImpl` test hook used for the fake-WebSocket backoff tests) — genuinely exercising the wire protocol end-to-end, just not through Node's native client. React-DOM-rendering tests (`realtime-hooks.test.tsx`, the component tests) DO use jsdom, but mock the transport entirely (`RealtimeSocket` itself, or the hooks), so they never touch a real socket and never hit this issue.
+
+## Tests passing
+
+**357 tests passing, 1 skipped** (up from 297 passing/1 skipped at the end of Step 7A) — 358 total across 59 files (up from 298 across 52). The skip is the same pre-existing optional Redis integration test from Step 3, untouched by this step. Every pre-Step-7B test still passes, except the 2 `tv-page.test.tsx` tests deliberately rewritten above (their premises — a static placeholder — no longer exist).
+
+```
+npm run typecheck                 # 3-stage chain (shared-types / server / web), zero errors, strict mode
+npm test                          # vitest run — 59 files, 358 tests (357 passed, 1 skipped)
+npm --prefix apps/web run lint    # eslint — 0 errors, 1 pre-existing-pattern warning (see below)
+npm --prefix apps/web run build   # next build — succeeds, all 7 routes compile (5 static, 1 dynamic, 1 not-found)
+```
+
+## A real lint finding this pass caught (fixed, not suppressed blindly)
+
+`react-hooks/refs`: `useHostRealtime` originally wrote `viewRef.current = view` directly in the render body (to give `startGame()` synchronous access to the latest view without depending on it in a `useCallback`). Writing to a ref during render is flagged because it's an impure side effect that can behave unpredictably under React's concurrent rendering. Fixed by moving it into its own `useEffect(() => { viewRef.current = view; }, [view])` — a genuine correctness fix, not a suppression.
+
+`react-hooks/set-state-in-effect`: three call sites (`QrCode`'s loading-state reset before starting async generation, and `useHostRealtime`/`usePlayerRealtime` resetting connection/private state when the session changes) reset React state synchronously at the top of an effect. Each is a legitimate "synchronize with an external system" case — the exact pattern the rule's own guidance carves out, and the same pattern Step 7A's `app/tv/page.tsx`/`join-room-form.tsx` already established for `sessionStorage` reads — documented inline and suppressed for that one line each, matching the existing repo convention exactly (`// eslint-disable-next-line react-hooks/set-state-in-effect -- see comment above`).
+
+The one remaining lint warning (`@next/next/no-img-element` on `QrCode.tsx`'s `<img>`) is intentional and was already documented in the component's own comment before this lint pass — a locally-generated data URL is not a remote image `next/image` optimizes meaningfully, and using `next/image` for a `data:` URI would add complexity for no real benefit.
+
+## Architecture contradiction found
+
+**None.** Everything in ARCHITECTURE.md relevant to Step 7B (host/player authentication via the existing reconnect events, identity bound server-side and never trusted from a later payload, `RoomActor`/FSM as the sole authority over game-state transitions, view-projection-only client exposure, `PrivatePlayerPayload` isolation) was implementable exactly as designed, using the WebSocket gateway exactly as Step 4 built it. No gateway behavior, close-code semantics, or session model needed to change.
+
+## Deferred items (explicitly out of scope for Step 7B)
+
+- Role reveal UI, and every gameplay-phase screen after it (corruption choice, discussion, mini-game play, voting, elimination, results, rematch, match clock) — `PostLobbyPlaceholder` intentionally renders a static, non-interpretive message once the phase leaves `LOBBY` and does nothing else.
+- Any client-side simulation of role assignment, timers, phase progression, corruption, voting, or win conditions — the server remains the sole authority for all of it; this step's client never assumes a transition happened before the server's own view says so.
+- Seen Jeem, multi-game registry, authentication accounts, purchases/Stripe, PostgreSQL/Prisma, AWS deployment, final visual artwork/advanced animation, analytics events.
+
+## Exact next recommended step
+
+**Development Step 8 — Role reveal and the first real gameplay-phase screens**, building the `ROLE_ASSIGNMENT`/`ROLE_REVEAL` UI on top of the now-live `TvScreenState`/`PlayerScreenState` boundary and `PrivatePlayerPayload` delivery this step already wired and tested — the natural next slice past `PostLobbyPlaceholder`, mirroring how the backend build order (Steps 1–2) implemented role assignment before any mini-game.
+
+## Step 7B completion
+
+- **Typed, reusable WebSocket client layer** (`RealtimeSocket` + `useHostRealtime`/`usePlayerRealtime`): complete.
+- **Auth-as-first-message** (`host:reconnect`/`player:reconnect`, never `player:join`, never a query-string token): complete.
+- **Host/player session restoration** (stored `sessionStorage` sessions, browser refresh, wrong-room-session rejection): complete.
+- **Reconnection**: complete — capped exponential backoff with jitter, online/offline handling, unauthorized/max-failures stop auto-reconnect, manual retry, reset-on-success, cleanup on unmount.
+- **TV lobby** (real room code, real QR, live roster, live connection status, start button): complete.
+- **Player phone lobby** (join confirmation, room code, connection status, live player count, waiting instructions, reconnection/session-expired feedback): complete.
+- **Live player connection updates**: complete, entirely via the existing gateway/FSM path — no new game logic in the frontend.
+- **QR code** (real generation, correct join-link encoding, no tokens/playerId, visible fallback): complete.
+- **Host start-game action** (real event, waits for authoritative response, never transitions locally): complete.
+- **Private payload isolation** (structural, never cross-player, never cached/logged/persisted): complete.
+- **Gateway changes**: none required or made.
+- **Tests**: complete — 357 passing + 1 correctly-skipped (pre-existing, unrelated to this step), covering every numbered requirement in the Step 7B brief.
+- **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
+- Role reveal, gameplay-phase UI, multi-game registry, authentication, payments, PostgreSQL, Prisma, AWS deployment, and final visual polish were intentionally **not** started, per the requested scope.

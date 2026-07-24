@@ -14,3 +14,4 @@ export { SectionTitle, type SectionTitleProps } from './SectionTitle';
 export { RoomCodeDisplay, type RoomCodeDisplayProps } from './RoomCodeDisplay';
 export { RoomCodeInput, type RoomCodeInputProps } from './RoomCodeInput';
 export { PlayerAvatar, type PlayerAvatarProps } from './PlayerAvatar';
+export { QrCode, type QrCodeProps } from './QrCode';

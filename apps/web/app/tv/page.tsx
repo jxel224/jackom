@@ -3,13 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { TvScreenLayout } from '../../components/layouts/TvScreenLayout';
-import { Button } from '../../components/ui/Button';
+import { TvLobby } from '../../components/tv-lobby';
 import { ErrorMessage } from '../../components/ui/ErrorMessage';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
-import { Panel } from '../../components/ui/Panel';
-import { RoomCodeDisplay } from '../../components/ui/RoomCodeDisplay';
 import { SectionTitle } from '../../components/ui/SectionTitle';
-import { StatusBadge } from '../../components/ui/StatusBadge';
 import { buttonClassName } from '../../components/ui/button-styles';
 import { ApiClientError, getRoomAvailability } from '../../lib/api/client';
 import { arabicMessageForErrorCode } from '../../lib/api/error-messages';
@@ -24,9 +21,9 @@ type ScreenState =
   | { status: 'error'; session: HostSessionRecord; message: string };
 
 /**
- * Real TV/host screen: reads the host session stored by `CreateRoomButton`, then confirms the
- * room is still there via a ONE-TIME availability check — no polling, no live roster (that's
- * Step 7B's WebSocket client). Everything past "room exists" is still a waiting state.
+ * Reads the stored host session, confirms via HTTP the room still exists (also getting
+ * `minPlayers`/`maxPlayers` for the lobby's start-button UX), then hands off to `TvLobby`, which
+ * owns the real WebSocket connection (Development Step 7B).
  */
 export default function TvPage() {
   const [state, setState] = useState<ScreenState>({ status: 'checking-session' });
@@ -95,44 +92,5 @@ export default function TvPage() {
     );
   }
 
-  const { session, availability } = state;
-
-  return (
-    <TvScreenLayout eyebrow="جاكوم">
-      <StatusBadge tone="info" live>
-        الاتصال المباشر باللاعبين قادم قريبًا
-      </StatusBadge>
-
-      <SectionTitle as="h1" scale="tv" className="items-center">
-        انضموا إلى الغرفة
-      </SectionTitle>
-
-      <RoomCodeDisplay code={session.roomCode} />
-
-      <div className="grid w-full max-w-2xl grid-cols-1 gap-6 sm:grid-cols-2">
-        <Panel className="flex flex-col items-center gap-3">
-          <p className="text-tv-sm font-bold text-ink">امسح رمز QR</p>
-          <div
-            role="img"
-            aria-label="سيظهر هنا رمز QR للانضمام لاحقًا"
-            className="flex h-40 w-40 items-center justify-center rounded-2xl border-2 border-dashed border-border-strong p-4 text-center text-sm text-ink-subtle"
-          >
-            رمز QR قريبًا
-          </div>
-        </Panel>
-
-        <Panel className="flex flex-col items-center justify-center gap-3">
-          <p className="text-tv-sm font-bold text-ink">اللاعبون</p>
-          <p className="text-ink-subtle">{availability.playerCount > 0 ? `${availability.playerCount} لاعبًا انضموا حتى الآن` : 'بانتظار انضمام اللاعبين...'}</p>
-        </Panel>
-      </div>
-
-      <div className="flex flex-col items-center gap-2">
-        <Button size="tv" disabled>
-          ابدأ اللعبة
-        </Button>
-        <p className="text-sm text-ink-subtle">سيتم تفعيل بدء اللعبة في خطوة قادمة.</p>
-      </div>
-    </TvScreenLayout>
-  );
+  return <TvLobby session={state.session} minPlayers={state.availability.minPlayers} maxPlayers={state.availability.maxPlayers} />;
 }

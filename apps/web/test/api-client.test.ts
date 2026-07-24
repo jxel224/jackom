@@ -33,7 +33,7 @@ describe('API client (configured)', () => {
   });
 
   it('getRoomAvailability() GETs /api/rooms/:roomCode and returns the parsed body', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, { roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 }));
     const result = await getRoomAvailability('AB23XY');
 
     expect(result.roomCode).toBe('AB23XY');

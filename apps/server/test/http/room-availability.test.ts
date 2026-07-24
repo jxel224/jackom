@@ -21,7 +21,7 @@ describe('GET /api/rooms/:roomCode', () => {
     const room = await createRoom(setup);
     const res = await requestJson<RoomAvailabilityResponseBody>(`${setup.baseUrl}/api/rooms/${room.roomCode}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ roomCode: room.roomCode, joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 });
+    expect(res.body).toEqual({ roomCode: room.roomCode, joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
   });
 
   it('resolves regardless of case (lowercase input normalizes to the stored uppercase code)', async () => {

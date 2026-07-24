@@ -10,13 +10,13 @@ vi.mock('../lib/api/client', async (importOriginal) => {
 
 // Must follow the vi.mock() call above.
 import { getRoomAvailability, joinRoom, ApiClientError } from '../lib/api/client';
-import { loadPlayerSession } from '../lib/session-storage';
+import { loadPlayerSession, savePlayerSession } from '../lib/session-storage';
 import { JoinRoomForm } from '../components/join-room-form';
 
 const mockedGetRoomAvailability = vi.mocked(getRoomAvailability);
 const mockedJoinRoom = vi.mocked(joinRoom);
 
-const AVAILABLE = { roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 };
+const AVAILABLE = { roomCode: 'AB23XY', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 };
 
 const MINIMAL_PLAYER_VIEW: PlayerView = {
   playerId: 'player-1',
@@ -64,6 +64,27 @@ describe('JoinRoomForm', () => {
 
     expect(await screen.findByText('أهلًا، سارة!')).toBeTruthy();
     expect(loadPlayerSession()).toEqual({ roomCode: 'AB23XY', playerId: 'player-1', playerSessionToken: 'player-token-1', displayName: 'سارة' });
+  });
+
+  it('a browser refresh with an already-joined session for this room restores the lobby directly, without re-running the join flow', async () => {
+    savePlayerSession({ roomCode: 'AB23XY', playerId: 'player-1', playerSessionToken: 'player-token-1', displayName: 'سارة' });
+
+    render(<JoinRoomForm roomCode="AB23XY" formatValid />);
+
+    expect(await screen.findByText('أهلًا، سارة!')).toBeTruthy();
+    // Never re-checks availability or re-joins — the restored session goes straight to the lobby.
+    expect(mockedGetRoomAvailability).not.toHaveBeenCalled();
+    expect(mockedJoinRoom).not.toHaveBeenCalled();
+  });
+
+  it('a stored session for a DIFFERENT room does not leak in — the normal join flow runs instead', async () => {
+    savePlayerSession({ roomCode: 'ZZZZ99', playerId: 'player-1', playerSessionToken: 'player-token-1', displayName: 'سارة' });
+    mockedGetRoomAvailability.mockResolvedValue(AVAILABLE);
+
+    render(<JoinRoomForm roomCode="AB23XY" formatValid />);
+
+    expect(await screen.findByLabelText('اسمك')).toBeTruthy();
+    expect(mockedGetRoomAvailability).toHaveBeenCalledWith('AB23XY');
   });
 
   it('sends the SAME requestId on every submit from one mounted form instance (idempotent retry)', async () => {

@@ -23,7 +23,7 @@ afterEach(() => {
 describe('/tv with a real stored host session', () => {
   it('displays the REAL room code from the stored session (never a placeholder) once availability resolves', async () => {
     saveHostSession({ roomCode: 'QR7K2M', hostSessionToken: 'host-token' });
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
 
     render(<TvPage />);
 
@@ -34,13 +34,54 @@ describe('/tv with a real stored host session', () => {
     expect(screen.getByText('بانتظار انضمام اللاعبين...')).toBeTruthy();
   });
 
-  it('shows a live-updating player count once players have joined', async () => {
+  it('wires the real, live TvLobby: the roster it shows comes from useHostRealtime, not the one-time availability check', async () => {
+    // Live player updates are WebSocket-driven (Step 7B) — the availability check only supplies
+    // minPlayers/maxPlayers for the start-button UX. Mock just the realtime hook to prove TvPage
+    // correctly passes the session/props down into the real TvLobby, without re-testing TvLobby's
+    // own internals (already covered by components/tv-lobby.test.tsx).
+    vi.resetModules();
+    vi.doMock('../lib/realtime/useHostRealtime', () => ({
+      useHostRealtime: () => ({
+        connectionState: 'connected',
+        view: {
+          roomCode: 'QR7K2M',
+          phase: { state: 'LOBBY', phaseId: 'p1', phaseStartedAt: 0, durationMs: null },
+          players: [
+            { playerId: 'p1', name: 'سارة', avatarId: 'a', alive: true, connectionStatus: 'connected' },
+            { playerId: 'p2', name: 'أحمد', avatarId: 'a', alive: true, connectionStatus: 'connected' },
+            { playerId: 'p3', name: 'محمد', avatarId: 'a', alive: true, connectionStatus: 'connected' },
+          ],
+          cycle: 0,
+          roundInCycle: 0,
+          firewallActive: false,
+          matchClock: null,
+          currentMinigame: null,
+          currentSpecialGame: null,
+          votingProgress: null,
+          lastRoundResult: null,
+          winner: null,
+        },
+        connectionError: null,
+        startGame: vi.fn(),
+        startPending: false,
+        startError: null,
+        retry: vi.fn(),
+      }),
+    }));
+
+    const { default: FreshTvPage } = await import('../app/tv/page');
     saveHostSession({ roomCode: 'QR7K2M', hostSessionToken: 'host-token' });
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 3, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 3, minPlayers: 2, maxPlayers: 12 });
 
-    render(<TvPage />);
+    render(<FreshTvPage />);
 
-    expect(await screen.findByText('3 لاعبًا انضموا حتى الآن')).toBeTruthy();
+    expect(await screen.findByText('اللاعبون (3)')).toBeTruthy();
+    expect(screen.getByText('سارة')).toBeTruthy();
+    expect(screen.getByText('أحمد')).toBeTruthy();
+    expect(screen.getByText('محمد')).toBeTruthy();
+
+    vi.doUnmock('../lib/realtime/useHostRealtime');
+    vi.resetModules();
   });
 
   it('shows a typed Arabic error state if the stored room no longer exists', async () => {
@@ -54,12 +95,15 @@ describe('/tv with a real stored host session', () => {
     expect(screen.getByRole('link', { name: 'إنشاء غرفة جديدة' })).toBeTruthy();
   });
 
-  it('never renders a WebSocket-live claim — connection status is explicitly labeled "coming soon"', async () => {
+  it('never silently claims to be live when the WebSocket gateway is unconfigured — shows a clear failed state instead', async () => {
+    // This test intentionally does NOT mock NEXT_PUBLIC_WS_URL/useHostRealtime — it verifies the
+    // REAL failure path when the env var is genuinely unset (as it is in this test process).
     saveHostSession({ roomCode: 'QR7K2M', hostSessionToken: 'host-token' });
-    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 0, maxPlayers: 12 });
+    mockedGetRoomAvailability.mockResolvedValue({ roomCode: 'QR7K2M', joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
 
     render(<TvPage />);
 
-    expect(await screen.findByText('الاتصال المباشر باللاعبين قادم قريبًا')).toBeTruthy();
+    expect(await screen.findByText('تعذر الاتصال بالخادم')).toBeTruthy();
+    expect(screen.getByText('الخدمة غير متاحة حاليًا.')).toBeTruthy();
   });
 });
