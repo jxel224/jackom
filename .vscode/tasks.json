@@ -1,0 +1,67 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Jackom Development",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "jackom-dev"
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "detail": "Starts the Next.js frontend + HTTP API + WebSocket gateway together (same as `npm run dev`)."
+    },
+    {
+      "label": "Start Frontend Only",
+      "type": "shell",
+      "command": "npm run dev:web",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "group": "jackom-dev" },
+      "detail": "Starts only the Next.js frontend (apps/web)."
+    },
+    {
+      "label": "Start Server Only",
+      "type": "shell",
+      "command": "npm run dev:server",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "group": "jackom-dev" },
+      "detail": "Starts only the HTTP API + WebSocket gateway + timer service (apps/server)."
+    },
+    {
+      "label": "Run All Checks",
+      "type": "shell",
+      "command": "npm run dev:check && npm test && npm run lint:web",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "detail": "Typecheck, env/Redis diagnostics, the full test suite, and lint — no servers started."
+    },
+    {
+      "label": "Start Development Redis",
+      "type": "shell",
+      "command": "npm run dev:redis",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "detail": "Starts the optional Docker-based local Redis (docker-compose.dev.yml)."
+    },
+    {
+      "label": "Stop Development Redis",
+      "type": "shell",
+      "command": "npm run dev:redis:stop",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared" },
+      "detail": "Stops the optional Docker-based local Redis started by \"Start Development Redis\"."
+    }
+  ]
+}

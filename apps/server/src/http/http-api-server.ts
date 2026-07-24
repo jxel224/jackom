@@ -156,6 +156,13 @@ export class HttpApiServer {
       const url = new URL(req.url ?? '/', 'http://internal');
       const segments = url.pathname.split('/').filter(Boolean);
 
+      if (segments.length === 1 && segments[0] === 'health' && req.method === 'GET') {
+        // Deliberately the least amount of information possible: no room state, no infrastructure
+        // detail, nothing that could help an attacker — just "this process is up and routing requests."
+        this.sendJson(res, 200, { status: 'ok' });
+        return;
+      }
+
       if (segments[0] === 'api' && segments[1] === 'rooms') {
         if (segments.length === 2 && req.method === 'POST') {
           await this.handleCreateRoom(req, res);

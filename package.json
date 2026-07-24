@@ -7,14 +7,23 @@
     "typecheck": "tsc -p packages/shared-types/tsconfig.json --noEmit && tsc -p apps/server/tsconfig.json --noEmit && npm --prefix apps/web run typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
+    "dev": "node scripts/dev.mjs",
     "dev:web": "npm --prefix apps/web run dev",
+    "dev:server": "tsx watch apps/server/src/main.ts",
+    "dev:server:debug": "tsx watch --inspect apps/server/src/main.ts",
+    "dev:check": "npm run typecheck && node scripts/check-dev-env.mjs",
+    "dev:redis": "docker compose -f docker-compose.dev.yml up -d",
+    "dev:redis:stop": "docker compose -f docker-compose.dev.yml down",
     "build:web": "npm --prefix apps/web run build",
     "lint:web": "npm --prefix apps/web run lint"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/ws": "^8.18.1",
+    "concurrently": "^9.1.2",
+    "dotenv": "^16.4.7",
     "jsdom": "^29.1.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

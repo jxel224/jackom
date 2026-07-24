@@ -1,0 +1,23 @@
+# Development-only Redis for Jackom (Development Step 7C). This is NOT required — any locally
+# installed Redis reachable at REDIS_URL works too (see LOCAL_DEVELOPMENT.md). This file exists as
+# a convenience for founders who'd rather not install Redis natively on Windows.
+#
+# Start:  npm run dev:redis        (docker compose -f docker-compose.dev.yml up -d)
+# Stop:   npm run dev:redis:stop   (docker compose -f docker-compose.dev.yml down)
+#
+# Security: bound to 127.0.0.1 only — never reachable from outside this machine. No password/secret
+# is set or committed (matches this repo's existing local-only threat model for Step 3's Redis
+# usage); do not reuse this compose file for anything beyond a local developer machine.
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: jackom-dev-redis
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - jackom-dev-redis-data:/data
+    command: ['redis-server', '--save', '60', '1']
+    restart: unless-stopped
+
+volumes:
+  jackom-dev-redis-data:

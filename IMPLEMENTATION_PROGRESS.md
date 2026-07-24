@@ -1,6 +1,6 @@
-# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A & 7B
+# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A, 7B & 7C
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), and 7B (browser WebSocket client + real-time lobby) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), 7B (browser WebSocket client + real-time lobby), and 7C (full local development runner) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
 
 > **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
@@ -1099,3 +1099,131 @@ The one remaining lint warning (`@next/next/no-img-element` on `QrCode.tsx`'s `<
 - **Tests**: complete — 357 passing + 1 correctly-skipped (pre-existing, unrelated to this step), covering every numbered requirement in the Step 7B brief.
 - **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
 - Role reveal, gameplay-phase UI, multi-game registry, authentication, payments, PostgreSQL, Prisma, AWS deployment, and final visual polish were intentionally **not** started, per the requested scope.
+
+---
+
+# Step 7C — Full Local Development Runner
+
+## Repository state before starting
+
+Verified clean at `4df0523` ("feat(web): add realtime room lobby", HEAD, matching Step 7B's completion commit) before any Step 7C work began — `git status` showed no uncommitted changes and `git log` confirmed the expected history back through `4bb551c`, `c6972fb`, and every earlier step commit.
+
+## Local runner architecture
+
+A new `apps/server/src/bootstrap.ts`, deliberately split into small, independently-testable pieces rather than one monolithic `main()` — mirroring this codebase's existing separation of "the one real-ambient-source file" (`fsm/default-deps.ts` for `Date.now()`/`Math.random()`, `http/env.ts` for `process.env`) from everything downstream that only ever receives already-resolved values:
+
+- **`connectToRedis(redisUrl)`** — a bounded-timeout Redis reachability probe (reusing the exact `lazyConnect`/`retryStrategy: () => null`/`connectTimeout` idiom `test/persistence/redis-integration.test.ts` already established), throwing a typed `RedisUnavailableError` with a clear, actionable message on failure. Never falls back to an in-memory store — that fallback exists only in the test suite (`InMemoryKeyValueStore`) and is never reachable from this file.
+- **`buildProductionRepos(redisClient)`** — the one place `RedisKeyValueStore` is constructed for a real run; returns the same four repository interfaces (`RoomStateRepository`, `RoomPrivateStateRepository`, `RoomLookupRepository`, `SessionRepository`) every other part of the codebase already depends on, never a concrete Redis type.
+- **`createJackomRuntime({ repos, fsmDeps, env })`** — builds exactly ONE `RoomActorManager`, hands it to both a `PhaseTimerService` (constructed exactly once, registering itself as the manager's lifecycle hooks per Step 5) and to both the `HttpApiServer` and `GatewayServer` constructors (the timer service passed only into the gateway's deps, exactly as Step 5 already wired it) — then starts both listeners, translating a bound-port failure into a typed `PortInUseError` and cleaning up the HTTP listener if the WebSocket gateway's `listen()` fails after it. Returns a `JackomRuntime` handle with a single `close()` that shuts the HTTP API, then the gateway (which also calls `timerService.shutdown()`), down in order.
+
+`apps/server/src/main.ts` is intentionally thin: `dotenv/config` loads `apps/server/.env` (if present), `loadServerEnvConfig()` (new `apps/server/src/env.ts`, composing the existing `loadHttpApiEnvConfig()` for CORS rather than duplicating it) resolves the rest of the environment, then `main()` calls the three `bootstrap.ts` functions above in sequence, prints the sanitized ready banner, and registers `SIGINT`/`SIGTERM` handlers for a clean combined shutdown (with a 5-second force-exit fallback in case `close()` ever hangs). Nothing game-logic-related lives in either file — nothing here duplicates or bypasses `RoomActorManager`, the FSM, or the WebSocket gateway's own message handling.
+
+## How one shared RoomActorManager is preserved
+
+Exactly the same shape `apps/server/test/http/http-gateway-integration.test.ts` already proved for Step 7A ("HTTP API and WebSocket gateway share the same authoritative RoomActorManager"), now wired for a real, long-running local process instead of a test: `createJackomRuntime` constructs ONE `RoomActorManager` and passes the SAME instance into both the `HttpApiServer` and `GatewayServer` constructors' `roomActorManager` field. There is no code path in `bootstrap.ts` that constructs a second manager. `apps/server/test/dev/bootstrap.test.ts`'s first test proves this behaviorally through the new bootstrap function itself (not just through the pre-existing hand-wired test helper): a room created via `runtime.httpApiPort`'s HTTP API is immediately connectable and authenticatable via `runtime.wsGatewayPort`'s WebSocket gateway — which is only possible if both sides are reading from the same in-memory actor map.
+
+## Root development scripts
+
+| Script | Does |
+|---|---|
+| `npm run dev` | Starts the Next.js frontend AND the server bootstrap together (`scripts/dev.mjs`), with prefixed (`[web]`/`[server]`) output and a clean combined shutdown on `Ctrl+C`. |
+| `npm run dev:web` | Frontend only (unchanged from Step 6 — `npm --prefix apps/web run dev`). |
+| `npm run dev:server` | Server only — `tsx watch apps/server/src/main.ts` (auto-restarts the ENTIRE process on any `apps/server` file change). |
+| `npm run dev:server:debug` | Same, with Node's `--inspect` flag, for the VS Code "Attach to Jackom Server" debug config. |
+| `npm run dev:check` | `npm run typecheck` + a read-only diagnostic (`scripts/check-dev-env.mjs`) of env files / installed dependencies / Redis reachability — warns, never silently hides a problem, never itself starts a server. |
+| `npm run dev:redis` / `npm run dev:redis:stop` | Starts/stops the optional Docker Redis (`docker-compose.dev.yml`). |
+
+`scripts/dev.mjs` uses `concurrently`'s programmatic API (`killOthersOn: ['failure', 'success']`) rather than a hand-rolled `child_process` orchestration — reliably killing a whole Windows process tree (`npm` → `tsx`/`next` → their own children) is a known-hard, easy-to-get-subtly-wrong problem that `concurrently` already solves correctly; verified directly in this session (`npm run dev` started, both services running, then a single `taskkill /T /F` on the top-level PID cleanly terminated the entire multi-level process tree — see "Smoke-test result" below). `scripts/dev-paths.mjs` is a small shared helper (used by both `dev.mjs` and `check-dev-env.mjs`) that creates and points at the three project-local D:-drive folders described below.
+
+## VS Code tasks added
+
+`.vscode/tasks.json`: **Start Jackom Development** (the default build task — same as `npm run dev`), **Start Frontend Only**, **Start Server Only**, **Run All Checks** (`dev:check` + full test suite + lint, no servers started), **Start Development Redis**, **Stop Development Redis**. Every task's `cwd` is `${workspaceFolder}` (not a hardcoded path) — correct as long as the founder opens `D:\projects\jackom` itself as the VS Code workspace folder, per this guide's own instructions, without assuming anything else about their machine.
+
+`.vscode/launch.json`: one **Attach to Jackom Server** Node "attach" config (port 9229), for use alongside `npm run dev:server:debug`.
+
+Both files are the only things Step 7C adds under `.vscode/` — `.gitignore` was changed from blanket-ignoring the whole directory to ignoring everything EXCEPT `tasks.json`/`launch.json`/`extensions.json` (none of the latter added), so these shared, project-level configs are committed while any future personal `settings.json` a founder adds locally stays untracked, exactly as before.
+
+## Environment setup
+
+Two new files: `apps/server/.env.example` (`REDIS_URL`, `HTTP_API_PORT`, `WS_GATEWAY_PORT`, `HTTP_ALLOWED_ORIGINS`, `FRONTEND_URL` for the banner, optional `ROOM_TTL_SECONDS`) and `apps/web/.env.example` (`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`, `NEXT_PUBLIC_WEB_BASE_URL` — the exact existing variable names Steps 6/7A/7B already validate in `apps/web/lib/env.ts`, nothing renamed). Every server-side variable has a safe localhost default in `apps/server/src/env.ts`'s zod schema, so `npm run dev` works even with no `.env` file at all — the example files exist to make overriding something (a different port, a remote Redis) discoverable, not because any of them are strictly required. `.gitignore` already protected `.env`/`.env.*` (with an `!.env.example` carve-out) before this step; unchanged.
+
+## Redis local-development approach
+
+Both supported, per the brief's "support the existing approach first" instruction:
+
+1. **Any reachable Redis** at `REDIS_URL` (default `redis://127.0.0.1:6379`) — this is the approach the codebase already established (`test/persistence/redis-integration.test.ts`'s own `REDIS_URL` convention, reused verbatim rather than inventing a new variable name).
+2. **`docker-compose.dev.yml`** (new) — a minimal, single-service Redis container for founders without a native Redis install: bound to `127.0.0.1:6379` only (never publicly reachable), no password/secret set or committed, a named Docker volume for persistence between restarts, `redis:7-alpine`. Started/stopped via `npm run dev:redis`/`npm run dev:redis:stop`.
+
+`npm run dev`/`npm run dev:server` never silently substitutes an in-memory store if Redis is unreachable — `connectToRedis()` throws a clear, actionable `RedisUnavailableError` and the process exits with a non-zero code instead of a partially-working "real" run. The in-memory fallback (`InMemoryKeyValueStore`) is used ONLY by the automated test suite, never by anything reachable from `main.ts`.
+
+## D-drive cache redirection
+
+`scripts/dev-paths.mjs` creates (if missing) and points at three project-local folders, all newly `.gitignore`d:
+
+- `D:\projects\jackom\.tmp` — `TEMP`/`TMP`
+- `D:\projects\jackom\.npm-cache` — `npm_config_cache`
+- `D:\projects\jackom\.logs` — reserved for future dev-script logging (not yet written to by anything in this step)
+
+`scripts/dev.mjs` passes this redirected environment into both the `dev:server` and `dev:web` child processes it starts. This is the same pattern used throughout this whole project's development sessions (previously via ad hoc `TEMP="D:/npm-tmp" ...` prefixes on individual commands) — Step 7C formalizes it into the actual committed tooling so a founder gets it automatically, without needing to know it's necessary. LOCAL_DEVELOPMENT.md is explicit that this only redirects Jackom's OWN temporary/cache files — Windows and VS Code themselves may still use a small amount of `C:` space for their own unrelated normal operation, which is outside this project's control.
+
+## Health check
+
+A new `GET /health` route on the EXISTING `HttpApiServer` (not a new server/listener) returns exactly `{"status":"ok"}` — no room state, no infrastructure detail, reachable without an `Origin` header and without any `allowedOrigins` configured (a health checker is not a browser). Covered by `apps/server/test/http/health.test.ts`.
+
+## Hot reload
+
+- **Frontend**: unchanged Next.js dev-server hot reload (Step 6).
+- **Server**: `tsx watch` restarts the ENTIRE `main.ts` process (not a partial/in-place hot-swap) on any `apps/server` file change — a deliberate choice, not a limitation: a full process restart is what structurally guarantees there can never be two overlapping WebSocket listeners or two `PhaseTimerService` instances after an edit, since the old process (and everything it held — sockets, timers, the in-memory actor map) is completely gone before the new one starts. Observed directly in this session's manual verification: after a startup failure (Redis unreachable), the `tsx watch` supervisor stays alive waiting for a file change rather than busy-retrying on a timer — correct, intentional `tsx watch` behavior, documented in LOCAL_DEVELOPMENT.md's troubleshooting section so it doesn't read as a bug.
+
+## Smoke-test result
+
+**Automated (this session), fully verified:**
+- Full test suite: 365 passing, 1 skipped (up from 357/1 at the end of Step 7B) — including the 8 new Step 7C tests (`apps/server/test/dev/bootstrap.test.ts` ×6, `apps/server/test/http/health.test.ts` ×2) and every pre-existing test unchanged and passing.
+- `apps/server/test/dev/bootstrap.test.ts` directly proves, using the same `InMemoryKeyValueStore`-backed repos every other test uses (no real Redis needed): a room created through the new bootstrap's HTTP API is immediately reachable through its WebSocket gateway (shared manager); a freshly created LOBBY room correctly shows no scheduled phase timer (the single `PhaseTimerService` is observing the same manager); a port already in use produces a typed `PortInUseError` and cleans up the other listener rather than leaking it; `close()` releases both ports immediately (a second runtime can reuse them right away).
+- `connectToRedis()` against an unreachable address (`redis://127.0.0.1:1`, and a version with embedded credentials) rejects with `RedisUnavailableError` whose message never contains the raw credentials — verified directly.
+- Manually ran `npm run dev:server` (via the real `tsx watch` CLI, not just the unit-tested `bootstrap.ts` functions) with no Redis running: printed the exact clear, actionable error message and exited the underlying script non-zero, exactly as designed.
+- Manually ran `npm run dev:check` with no `.env` files and no Redis running: correctly reported all three warnings (missing `apps/server/.env`, missing `apps/web/.env.local`, Redis unreachable) without crashing, exit code 0 (diagnostics, not a hard gate).
+- Manually ran the full `npm run dev` (via `scripts/dev.mjs`) twice: both `[web]` and `[server]`-prefixed output appeared correctly; the frontend started and served a real `200` response at `http://localhost:3000` (confirmed via `curl`) even while the server half failed on the missing Redis connection with its own clearly-prefixed error; a single `taskkill /T /F` on the top-level process cleanly terminated the entire multi-process tree (`npm` → `concurrently` → `npm run dev:server`/`dev:web` → `tsx`/`next` → their own children) with no orphaned processes left behind, confirmed via `wmic process` before/after.
+- Full 3-stage typecheck, eslint (`apps/web`), and `next build` all pass (see below).
+
+**Not possible to run live, and honestly documented as such**: this sandboxed environment has no Redis installed, no Docker, and no WSL available (confirmed: `docker --version`, `wsl.exe --list`, and `redis-server --version` all fail with "not found"/"not installed"). The full happy-path manual smoke test described in the Step 7C brief — creating a real room, joining from a second browser context, seeing the player appear live on the TV, disconnect/reconnect restoring the same player, the host starting the match, and the post-lobby placeholder appearing — could **not** be executed end-to-end live in this session, since it genuinely requires a reachable Redis and a real browser. Every PIECE of that flow that doesn't require live Redis was already verified automatically above (shared-manager wiring, the Redis-unavailable failure path, the frontend serving real pages, clean multi-process shutdown) or was already proven by the EXISTING, unchanged, still-passing WebSocket/HTTP integration test suite (Steps 4/7A/7B) that this bootstrap composes without modifying. **Remaining manual step for the founder**: follow LOCAL_DEVELOPMENT.md §4 (start Redis) and §8 (the exact 5-step host+phone smoke test) once running on a machine with Redis/Docker available.
+
+## Tests passing
+
+**365 tests passing, 1 skipped** (up from 357 passing/1 skipped at the end of Step 7B) — 366 total across 61 files (up from 358 across 59). The skip is the same pre-existing optional Redis integration test from Step 3. Every pre-Step-7C test is unchanged and still passing.
+
+```
+npm run typecheck                 # 3-stage chain (shared-types / server / web), zero errors, strict mode
+npm test                          # vitest run — 61 files, 366 tests (365 passed, 1 skipped)
+npm --prefix apps/web run lint    # eslint — 0 errors, 1 pre-existing-pattern warning (QrCode.tsx's <img>, unrelated to this step)
+npm --prefix apps/web run build   # next build — succeeds, all 7 routes compile (5 static, 1 dynamic, 1 not-found)
+```
+
+## Architecture contradiction found
+
+**None.** ARCHITECTURE.md §7.1's single-process, no-distributed-lock MVP concurrency model (Redis used purely for persistence/recovery, one `RoomActorManager` per process) is exactly what `createJackomRuntime` wires into a real, runnable entry point — nothing about local dev tooling required reversing or correcting anything in the architecture document.
+
+## Deferred / out of scope for Step 7C
+
+Role reveal UI, gameplay UI, real mini-games, voting/results UI, Seen Jeem, multi-game registry, PostgreSQL, Prisma, AWS, authentication accounts, Stripe, purchases, production deployment, new game rules, and any Redis schema change — none of this was touched, per the requested scope. Also explicitly deferred: a real production `Dockerfile`/deployment story (`docker-compose.dev.yml` is Redis-only, development-only, and says so in its own header comment) and a `.logs/`-writing mechanism (the folder is created and reserved, but nothing yet writes to it — stdout is still where all current dev output goes).
+
+## Exact next development step
+
+**Development Step 8 — Role reveal and the first real gameplay-phase screens**, unchanged from the recommendation at the end of Step 7B — Step 7C added no new gameplay scope, only the tooling to run everything that already exists. Step 8 would build the `ROLE_ASSIGNMENT`/`ROLE_REVEAL` UI on top of the now-live, now-locally-runnable `TvScreenState`/`PlayerScreenState` boundary and `PrivatePlayerPayload` delivery.
+
+## Step 7C completion
+
+- **Combined local server bootstrap** (one shared `RoomActorManager`, one `PhaseTimerService`, HTTP API + WebSocket gateway together): complete.
+- **One-command development startup** (`npm run dev`, plus `dev:web`/`dev:server`/`dev:server:debug`/`dev:check`/`dev:redis`/`dev:redis:stop`): complete.
+- **Redis local development** (existing `REDIS_URL` approach supported; optional `docker-compose.dev.yml` added; clear failure on unreachable Redis, never a silent in-memory fallback): complete.
+- **D:-drive cache/tmp redirection** (`.tmp`/`.npm-cache`/`.logs`, gitignored, wired into both dev child processes): complete.
+- **`.env.example` files** for both apps, reusing every existing environment-variable name: complete.
+- **VS Code integration** (`tasks.json` with 6 tasks, `launch.json` attach config, `.gitignore` updated to commit them without exposing personal settings): complete.
+- **Hot reload** (frontend unchanged; server via full, clean `tsx watch` process restarts — structurally impossible to duplicate listeners/timer services): complete.
+- **Local URLs/ports** (preserved from prior steps' documented HTTP-vs-WS separation; sanitized startup banner; typed port-conflict detection): complete.
+- **Development health check** (`GET /health`, minimal safe response): complete.
+- **Browser auto-opening**: not implemented (optional per the brief) — the documented URL (`http://localhost:3000`) is provided instead.
+- **Tests**: complete — 365 passing + 1 correctly-skipped (pre-existing, unrelated to this step), covering every automatable requirement in the Step 7C brief.
+- **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass; the dev runner itself was manually started/stopped multiple times in this session (see "Smoke-test result").
+- **Manual end-to-end smoke test**: partially completed live (frontend reachability, Redis-failure path, clean multi-process shutdown); the Redis-dependent host+player browser flow could not be run live in this sandboxed environment (no Redis/Docker/WSL available) and is documented as the founder's remaining manual step.
+- Role reveal, gameplay UI, real mini-games, multi-game registry, authentication, payments, PostgreSQL, Prisma, AWS deployment, and Redis schema changes were intentionally **not** started, per the requested scope.

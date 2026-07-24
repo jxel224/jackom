@@ -32,8 +32,19 @@ tmp/
 temp/
 *.tmp
 
+# Development Step 7C: project-local D:-drive cache/tmp/log redirection (see LOCAL_DEVELOPMENT.md) —
+# generated, never committed.
+.tmp/
+.npm-cache/
+.logs/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
+
+# VS Code: commit shared project tasks/launch config, ignore personal machine-specific settings.
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
