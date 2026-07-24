@@ -10,3 +10,5 @@ export * from './views';
 export * from './minigame';
 export * from './events';
 export * from './room-code';
+export * from './display-name';
+export * from './http-api';

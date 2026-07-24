@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { buttonClassName } from '../components/ui/button-styles';
+import { CreateRoomButton } from '../components/create-room-button';
 import { PageContainer } from '../components/ui/PageContainer';
 import { SectionTitle } from '../components/ui/SectionTitle';
 
@@ -15,9 +16,9 @@ export default function HomePage() {
       </div>
 
       <div className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
-        <Link href="/tv" className={buttonClassName({ size: 'lg', fullWidth: true })}>
-          أنشئ غرفة
-        </Link>
+        <div className="w-full sm:flex-1">
+          <CreateRoomButton>أنشئ غرفة</CreateRoomButton>
+        </div>
         <Link href="/join" className={buttonClassName({ variant: 'secondary', size: 'lg', fullWidth: true })}>
           انضم إلى غرفة
         </Link>

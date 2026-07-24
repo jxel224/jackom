@@ -1,6 +1,6 @@
-# Implementation Progress — Development Steps 1, 2, 3, 4, 5 & 6
+# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6 & 7A
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), and 6 (Next.js frontend foundation + Arabic RTL design system) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, real WebSocket client, or real create/join-room API integration were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), and 7A (real room create/join HTTP API + frontend integration) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or a real WebSocket client were implemented, per scope.
 
 > **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
@@ -772,4 +772,122 @@ Neither finding touches ARCHITECTURE.md's actual subject matter (server FSM/pers
 - **QR placeholder**: complete (visible placeholder box, no library added).
 - **Tests**: complete — all 10 required verification points, 224 passing + 1 correctly-skipped (pre-existing, unrelated to this step).
 - **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
-- Full WebSocket client, real create/join-room API flow, authentication, Stripe/purchases, PostgreSQL, Prisma, AWS deployment, Redis changes, Seen Jeem, multi-game registry, real mini-games, final art/animations, admin dashboard, and multi-language localization were intentionally **not** started, per the requested scope.
+- Full WebSocket client, real create/join-room API flow (see Step 7A, below), authentication, Stripe/purchases, PostgreSQL, Prisma, AWS deployment, Redis changes, Seen Jeem, multi-game registry, real mini-games, final art/animations, admin dashboard, and multi-language localization were intentionally **not** started in this step, per the requested scope.
+
+---
+
+# Step 7A — Real Room HTTP API and Frontend Create/Join Flow
+
+## HTTP server architecture
+
+A new `apps/server/src/http/` module, deliberately built on Node's built-in `http` module rather than a framework (Express/Fastify/etc.) — the same "no framework, match the existing style" choice Step 4 made for the WebSocket gateway (`ws` over Socket.IO). `HttpApiServer` mirrors `GatewayServer`'s exact shape: `constructor(deps, options)` + `listen(port)`/`close()`, constructed with the SAME `RoomActorManager`/`roomLookupRepo`/`sessionRepo`/`fsmDeps` a `GatewayServer` would use. It is a **separate listener on its own port** — not merged onto the WebSocket gateway's internal HTTP server — but "reuse the existing infrastructure" is satisfied where it actually matters: both share one `RoomActorManager` (and therefore the same in-memory actors, the same Redis-backed repositories) when constructed together in the same process, so a room/session created over HTTP is immediately usable over the WebSocket gateway with no second registration path. This is proven directly by `apps/server/test/http/http-gateway-integration.test.ts`, which builds one `RoomActorManager` and hands it to both an `HttpApiServer` and a `GatewayServer` in the same test.
+
+There is still no production bootstrap/`main.ts` (consistent with every prior step — everything is exercised through test helpers, e.g. `startTestHttpApi()` mirroring `startTestGateway()`); wiring a real process that starts both listeners together is deployment work, out of scope here.
+
+## Endpoints implemented
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/rooms` | Creates a room via `RoomActorManager.createRoom()` (the exact Step 3 method — no new room-creation logic). Returns `{ roomCode, hostSessionToken, tv: TvView }`. |
+| `GET /api/rooms/:roomCode` | Read-only availability check via `RoomActor.getOrLoadSnapshot()`. Returns `{ roomCode, joinable, full, matchStarted, playerCount, maxPlayers }` — no roster, no private content. |
+| `POST /api/rooms/:roomCode/players` | Registers a player via `RoomActor.runLifecycle(joinPlayer)` (the exact Step 2/4 function, the same path the WebSocket gateway's `player:join` uses). Returns `{ roomCode, playerId, playerSessionToken, view: PlayerView }`. |
+
+All three, plus their DTOs (`CreateRoomResponseBody`, `RoomAvailabilityResponseBody`, `JoinRoomRequestBody`, `JoinRoomResponseBody`, `ApiErrorPayload`, `ApiErrorCode`) live in `packages/shared-types/src/http-api.ts` — genuinely shared between server and client, the same relationship `WireMessage`/`InboundEvent` already have for the WebSocket boundary, so the frontend never hand-duplicates these shapes.
+
+## How RoomActor authority is preserved
+
+No HTTP handler ever touches Redis or `RoomState` directly, and none calls an FSM transition function. `handleCreateRoom` calls `RoomActorManager.createRoom(config)` (Step 3, unchanged). `handleJoinRoom` calls `RoomActor.runLifecycle()` with the exact same `joinPlayer` pure function `gateway-server.ts`'s `handlePlayerJoin` already calls — HTTP join and WebSocket join are the SAME registration path, not two implementations; a request that lands while a WebSocket join for the same room is in flight is naturally serialized by the room's single actor queue (Step 3's per-room `Promise` chain), exactly as any two concurrent player joins already were. Rejections from that authoritative path (`INVALID_PLAYER_COUNT`, `MATCH_IN_PROGRESS`) are mapped to typed HTTP errors (`ROOM_FULL`, `ROOM_NOT_JOINABLE`) — the HTTP layer translates rejection vocabulary, it does not decide anything itself.
+
+Host and player identity remain structurally separate exactly as ARCHITECTURE.md §1.1 requires: `createRoom()` issues a `hostSessionToken` bound to `roomId` only; `joinPlayer()` issues a `sessionToken` bound to `{roomId, playerId}`. No endpoint accepts a client-supplied `playerId` or session token as an input claiming an identity — every identity in every response is freshly server-generated.
+
+**One deliberate placeholder**: no avatar-selection UI exists yet, so every HTTP-created player gets a fixed `avatarId: 'default'` (`http-api-server.ts`'s `DEFAULT_AVATAR_ID` constant) — clearly marked as a placeholder pending a real avatar picker, not a new design decision.
+
+## Idempotency (duplicate-request protection)
+
+`joinRoom`'s request body accepts an optional client-generated `requestId`. A retried request with the SAME `{roomId, requestId}` replays the ORIGINAL response (200, not 201) instead of registering a second player — implemented as a small single-instance, in-memory `IdempotencyCache` (TTL-evicted `Map`, `apps/server/src/http/idempotency-cache.ts`). Reusing a `requestId` with a genuinely DIFFERENT `displayName` is rejected as `DUPLICATE_PLAYER` (409) rather than silently replaying a mismatched result. `JoinRoomForm` (frontend) generates one `requestId` per mount via `crypto.randomUUID()` and reuses it for every submit from that component instance, so an accidental double-click or a retry after a dropped response is safe; a genuinely new page visit gets a fresh id and legitimately creates a new player.
+
+## Sessions: creation and storage
+
+Creation is unchanged from Steps 3/4 — `sessionRepo.setHostSession()`/`setPlayerSession()`, same Redis keys, same TTL refresh behavior, called from the exact same places (`RoomActorManager.createRoom()` for host; the HTTP handler's post-`runLifecycle` step for player, mirroring `gateway-server.ts`'s `handlePlayerJoin` line-for-line).
+
+Storage is new: `apps/web/lib/session-storage.ts`, a typed `sessionStorage` (not `localStorage`, not a cookie) boundary. Every read/write is wrapped in try/catch, degrading to "no session" rather than throwing on private-browsing/quota/corrupted-JSON failures. `sessionStorage` specifically because: a tab refresh keeps working, host and player sessions opened in separate tabs never collide, and no token ever appears in a URL or gets rendered into visible UI. Two keys: `jackom.hostSession` (`roomCode`, `hostSessionToken`) and `jackom.playerSession` (`roomCode`, `playerId`, `playerSessionToken`, `displayName`) — exactly the fields the brief specifies, nothing extra.
+
+## Frontend pieces created
+
+- **`lib/api/client.ts`** — the one typed HTTP boundary; no page calls `fetch()` directly. `createRoom()`/`getRoomAvailability()`/`joinRoom()`, each going through one internal `apiRequest<T>()` that adds a `AbortController`-based timeout (8s default), maps non-2xx JSON error bodies to a typed `ApiClientError` (carrying the server's `code`/`status`), and maps network failures/aborts to typed `NETWORK_ERROR`/`TIMEOUT` codes distinct from server-side error codes. Checks `NEXT_PUBLIC_API_URL` at CALL time (not module load), so an unset value never breaks `next build`'s static prerendering (`NOT_CONFIGURED` error instead) — same reasoning Step 6 already applied to `NEXT_PUBLIC_WS_URL`.
+- **`lib/api/error-messages.ts`** — one Arabic message per `ApiClientErrorCode` (server codes + the three client-only ones), so every error surface in the app renders the same message for the same failure.
+- **`lib/session-storage.ts`** — described above.
+- **`components/create-room-button.tsx`** — the one client-interactive island on the otherwise server-rendered landing page: owns loading/error state, calls `createRoom()`, stores the host session, navigates to `/tv`.
+- **`components/join-room-form.tsx`** — the client component behind `/join/[roomCode]`: one-time room-availability check → display-name form → real join request → stores the player session → Arabic waiting screen. A five-state machine (`invalid-format` / `checking` / `unavailable` / `ready` / `joined`), never polling, never claiming a live roster.
+
+## Frontend routes connected
+
+- **`/` (home)**: "أنشئ غرفة" is now a real button (`CreateRoomButton`), not a `<Link>` — it performs the actual API call before navigating. "انضم إلى غرفة" stays a plain `<Link>` to `/join` (no API call needed there).
+- **`/tv`**: reads the stored host session on mount; with no session, shows an honest "لم يتم إنشاء غرفة بعد" state (never fabricated room content). With a session, does ONE availability check and displays the REAL room code (`RoomCodeDisplay`) and current player count — explicitly labeled "الاتصال المباشر باللاعبين قادم قريبًا" (live connection coming soon), never implying a live roster. "ابدأ اللعبة" remains disabled (Step 7B).
+- **`/join`**: unchanged room-code entry UX, but the submit button ("متابعة") now performs real client-side validation and navigates to `/join/[code]` for a complete code (previously a no-op `preventDefault`).
+- **`/join/[roomCode]`**: the server page still only does the cheap, safe param normalization/format-check (unchanged from Step 6); everything requiring a network call or `sessionStorage` was extracted into `JoinRoomForm` (a client component), keeping the async Server Component pattern Step 6 established for the param-safety guarantee.
+
+## Validation and security behavior
+
+- **Room code**: normalized (`trim` + uppercase) and format-checked via the SAME shared helpers (`packages/shared-types/src/room-code.ts`) on both the URL path segment (HTTP) and the route param (frontend) — one definition, not two.
+- **Display name**: new `packages/shared-types/src/display-name.ts` (mirrors `room-code.ts`'s pattern) — `normalizeDisplayNameInput()` (trim only) + `isValidDisplayName()` (length 1–24 after trim, rejects `\p{Cc}`/`\p{Cf}` control/format-only content). Deliberately permissive on script (Arabic and Latin both accepted, and anything else too) since no restrictive-charset rule exists anywhere else in the codebase to "follow," per the brief's own instruction.
+- **Request size**: 16KB body limit (matches the WebSocket gateway's `maxPayloadBytes` default), enforced by aborting the body-read stream mid-flight, not after buffering an oversized payload.
+- **Malformed JSON / missing fields / wrong types**: all zod-validated (`apps/server/src/http/schemas.ts`), producing typed 400 errors, never a raw parse exception.
+- **CORS**: exact-origin allow-list only (`HttpApiOptions.allowedOrigins`, validated via `loadHttpApiEnvConfig()` reading `HTTP_ALLOWED_ORIGINS`) — no wildcard, ever. A request WITH an `Origin` header not on the list is rejected 403 **before routing**, not just left for the browser to silently block — defense in depth, not just "let CORS handle it." `Access-Control-Allow-Credentials` is never set (sessions travel in response/request bodies, never cookies, per the brief's explicit instruction not to invent cookie auth this step). A request with NO `Origin` header (non-browser callers, e.g. the test suite's own `fetch`) is not blocked — CORS is a browser enforcement mechanism, so there's nothing to check without an `Origin` to check against.
+- **Rate limiting**: reuses the existing `RateLimiter` class (Step 4, sliding window, clock-injected) — one bucket per client IP, shared across `POST /api/rooms` and `POST /api/rooms/:roomCode/players` (the two "creation and joining" endpoints named in the brief); `GET` availability checks are not rate-limited. **In-memory, single-instance only** — explicitly not backed by Redis, matching the brief's instruction not to add distributed rate limiting; documented in `http-api-server.ts`'s own comments.
+- **No trust of client-supplied identity**: no endpoint accepts a `playerId`/host token as input for anything other than looking up an EXISTING session (which none of these three endpoints even do) — every id in every response is freshly generated server-side.
+- **Logging**: every HTTP failure path logs through the same narrow `RoomLogger` (`{roomId, event}`, no raw-object escape hatch) Steps 3–5 already established; verified directly (`14.` in both `create-room.test.ts` and `join-room.test.ts`) that a session token never appears in a captured log entry.
+
+## Tests added
+
+**40 new backend tests** (`apps/server/test/http/`, 6 files) covering requirements 1–16 from the brief (room-code normalization, host-session validity/persistence, availability success/not-found/expired/malformed, exactly-one-player joins, valid player sessions, malformed-code/invalid-name/full-room/started-room rejections, idempotent-vs-distinct requestId behavior, no raw `RoomState`/`RoomPrivateState` in any response, no logged tokens, CORS accept/reject/preflight/no-credentials, typed rate-limit response) plus the HTTP↔WebSocket shared-infrastructure integration test described above.
+
+**32 new frontend tests** (8 files) covering requirements 17–21: `create-room-button.test.tsx` (stores host session + navigates on success, loading state, typed Arabic error on failure), `tv-page.test.tsx` (real room code display, live-updating-count-is-still-one-time-fetch, typed error state, "coming soon" connection label), `join-room-form.test.tsx` (availability-gated form, stores player session on success, same `requestId` across retries, typed Arabic error on failure), rewritten `join-room-code-route.test.tsx` (malformed param never calls the API; valid param normalizes before checking availability), `api-client.test.ts` + `api-client-not-configured.test.ts` (request shape, error-code mapping, network/timeout mapping, unconfigured-URL short-circuit), `session-storage.test.ts` (round-trip, independence, corrupted-JSON and storage-failure degradation), and an updated `routes.test.tsx` reflecting the new interactive `/`/`/tv`/`/join` states.
+
+**22 (backend #22/#23), 24, 25, 26, 27**: verified by running the existing suites/tools unchanged — all 155 pre-existing backend tests (including every WebSocket gateway and timer test) and all 70 pre-existing frontend tests still pass; full 3-stage typecheck, eslint, and `next build` all succeed (see below).
+
+## Tests passing
+
+**297 tests passing, 1 skipped** (195 backend incl. 40 new HTTP tests + 102 frontend incl. 32 new). The skip is the same pre-existing optional Redis integration test from Step 3.
+
+```
+npm run typecheck   # 3-stage chain, zero errors, strict mode
+npm test              # vitest run — 52 files, 298 tests (297 passed, 1 skipped)
+npm --prefix apps/web run lint    # 0 errors, 0 warnings
+npm --prefix apps/web run build   # succeeds, all 7 routes compile (5 static, 1 dynamic, 1 not-found)
+```
+
+## A real lint finding this pass caught (fixed, not suppressed blindly)
+
+`app/tv/page.tsx`'s `useEffect` reads `sessionStorage` (browser-only, unavailable during SSR) and calls `setState` synchronously in the effect body — `eslint-config-next`'s `react-hooks/set-state-in-effect` rule flags this as a potential unnecessary-effect anti-pattern. It is NOT one here: a `useState` lazy initializer would only ever see the SSR-time `null` result even after client hydration (React does not re-run lazy initializers during hydration), permanently hiding a real session. The effect-based read is the architecturally correct pattern for "synchronize with an external system" (the exact case the rule's own guidance carves out) — documented inline and the rule suppressed for that one line with a comment explaining why, rather than either silently accepting a broken pattern or contorting the code to please the linter.
+
+## Architecture contradiction found
+
+**None.** Everything in ARCHITECTURE.md relevant to Step 7A (host/player session separation, identity bound server-side, `joinPlayer`/`createRoom` as the sole registration paths, view-projection-only client exposure, single-actor-per-room serialization) was implementable exactly as designed — the HTTP layer is a second entry point INTO the same authoritative path, not a new one.
+
+## Deferred Step 7B items (explicitly out of scope for 7A)
+
+- Browser WebSocket client (the `SocketConnectionState`/`TvScreenState`/`PlayerScreenState` interfaces `lib/realtime/` already declares, per Step 6, are still unimplemented).
+- Live player-list updates on `/tv` (today: one-time availability fetch on mount, explicitly labeled "coming soon").
+- Reconnection UI.
+- Host start-game action (`/tv`'s "ابدأ اللعبة" stays disabled).
+- QR generation, gameplay/role-reveal/voting/mini-game screens.
+- Authentication accounts, purchases, Stripe, PostgreSQL, Prisma, AWS deployment, Redis schema changes.
+
+## Exact recommended next step
+
+**Development Step 7B — Browser WebSocket client + live lobby**: implement the actual WebSocket connection (using the stored `hostSessionToken`/`playerSessionToken` from `lib/session-storage.ts` to authenticate via `host:reconnect`/`player:reconnect`, exactly as `http-gateway-integration.test.ts` already proves works end-to-end at the protocol level), populate `lib/realtime/`'s `TvScreenState`/`PlayerScreenState` from real `view:tv`/`view:player` messages, make `/tv`'s roster and player count live, and enable the host's real "ابدأ اللعبة" action — still stopping short of any actual gameplay-phase UI (role reveal, corruption, voting, mini-games), which remains later work.
+
+## Step 7A completion
+
+- **HTTP boundary** (`POST /api/rooms`, `GET /api/rooms/:roomCode`, `POST /api/rooms/:roomCode/players`): complete.
+- **Authoritative-path reuse** (no direct Redis/RoomState access, no FSM calls from HTTP handlers, join registration shared with the WebSocket gateway): complete.
+- **Typed error format** across all three endpoints: complete.
+- **Security** (size limits, per-IP rate limiting on create/join, exact-origin CORS with no wildcard/credentials, no client-trusted identity, no token logging): complete.
+- **Idempotent join retries**: complete.
+- **Frontend integration** (home create button, `/tv` real room display, `/join` navigation, `/join/[roomCode]` availability check + name form + real join + waiting screen): complete.
+- **Session storage** (`sessionStorage`, typed, degrade-safe): complete.
+- **Typed API client**: complete.
+- **Tests**: complete — all 27 required verification points, 297 passing + 1 correctly-skipped (pre-existing, unrelated to this step).
+- **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
+- Browser WebSocket client, live lobby updates, host start-game, QR generation, gameplay screens, authentication, payments, PostgreSQL, Prisma, AWS deployment, and Redis schema changes were intentionally **not** started, per the requested scope.

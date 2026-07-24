@@ -95,3 +95,13 @@ export { RealTimerScheduler } from './timers/real-timer-scheduler.js';
 export { FakeTimerScheduler } from './timers/fake-timer-scheduler.js';
 export { PhaseTimerService } from './timers/phase-timer-service.js';
 export type { PhaseTimerServiceDeps } from './timers/phase-timer-service.js';
+
+// ---- Step 7A: HTTP room create/join API -----------------------------------------------------
+
+export { HttpApiServer } from './http/http-api-server.js';
+export type { HttpApiDeps, HttpApiOptions } from './http/http-api-server.js';
+export { ApiError, ApiErrors } from './http/errors.js';
+export { IdempotencyCache } from './http/idempotency-cache.js';
+export { CreateRoomRequestSchema, JoinRoomRequestSchema, RoomCodeParamSchema } from './http/schemas.js';
+export { loadHttpApiEnvConfig } from './http/env.js';
+export type { HttpApiEnvConfig } from './http/env.js';
