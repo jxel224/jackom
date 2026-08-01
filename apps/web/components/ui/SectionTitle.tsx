@@ -19,7 +19,7 @@ export function SectionTitle({ children, as, subtitle, scale = 'default', classN
   const Tag: ElementType = as ?? 'h2';
   return (
     <div className={['flex flex-col gap-1', className].filter(Boolean).join(' ')}>
-      <Tag className={['font-extrabold text-ink', SIZE_CLASSES[scale]].join(' ')}>{children}</Tag>
+      <Tag className={['font-display font-extrabold tracking-tight text-ink', SIZE_CLASSES[scale]].join(' ')}>{children}</Tag>
       {subtitle ? <p className="text-ink-muted">{subtitle}</p> : null}
     </div>
   );

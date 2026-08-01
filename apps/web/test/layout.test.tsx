@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 // app/layout.tsx doesn't blow up outside an actual `next build`/`next dev` process.
 vi.mock('next/font/google', () => ({
   Cairo: () => ({ variable: 'font-cairo-var', className: 'font-cairo-class' }),
+  Baloo_Bhaijaan_2: () => ({ variable: 'font-baloo-var', className: 'font-baloo-class' }),
+  JetBrains_Mono: () => ({ variable: 'font-jetbrains-mono-var', className: 'font-jetbrains-mono-class' }),
 }));
 
 // Must follow the vi.mock() call above.

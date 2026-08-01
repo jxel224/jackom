@@ -23,7 +23,7 @@ export function RoomCodeDisplay({ code, className = '' }: RoomCodeDisplayProps) 
         <span
           key={index}
           aria-hidden="true"
-          className="flex h-14 w-11 items-center justify-center rounded-2xl border border-border-strong bg-surface-2 text-tv-base font-black text-ink sm:h-20 sm:w-16"
+          className="flex h-16 w-12 items-center justify-center rounded-2xl border-[3px] border-ink bg-surface-2 font-mono text-tv-base font-black text-brand shadow-hard-sm sm:h-24 sm:w-[4.5rem]"
         >
           {char}
         </span>

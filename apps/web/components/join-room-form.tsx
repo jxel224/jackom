@@ -144,7 +144,8 @@ export function JoinRoomForm({ roomCode, formatValid }: JoinRoomFormProps) {
   }
 
   return (
-    <Panel as="form" className="flex flex-col gap-5" onSubmit={handleSubmit}>
+    <Panel as="form" variant="hard" className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      <p className="text-sm text-ink-muted">انضممت إلى الغرفة {roomCode} — جوالك سيصبح أداة التحكم في اللعبة.</p>
       <Input
         label="اسمك"
         value={displayName}

@@ -1,6 +1,6 @@
-# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A, 7B & 7C
+# Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A, 7B, 7C & 8A
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), 7B (browser WebSocket client + real-time lobby), and 7C (full local development runner) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), 7B (browser WebSocket client + real-time lobby), 7C (full local development runner), and 8A (Jackom visual identity + product UX redesign) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
 
 > **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
@@ -1226,4 +1226,88 @@ Role reveal UI, gameplay UI, real mini-games, voting/results UI, Seen Jeem, mult
 - **Tests**: complete — 365 passing + 1 correctly-skipped (pre-existing, unrelated to this step), covering every automatable requirement in the Step 7C brief.
 - **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass; the dev runner itself was manually started/stopped multiple times in this session (see "Smoke-test result").
 - **Manual end-to-end smoke test**: partially completed live (frontend reachability, Redis-failure path, clean multi-process shutdown); the Redis-dependent host+player browser flow could not be run live in this sandboxed environment (no Redis/Docker/WSL available) and is documented as the founder's remaining manual step.
+
+---
+
+# Step 8A — Jackom Visual Identity and Product UX Redesign
+
+## Repository state before starting
+
+Confirmed clean working tree on `master`, `59cbb97` (Step 7C) as `HEAD`, 365 tests passing/1 skipped, matching the brief's stated verified state exactly.
+
+## Scope
+
+Visual identity + product UX only, on top of the existing, unchanged Steps 1–7C functionality: every FSM/RoomActor/Redis/WebSocket-protocol/session-storage behavior is untouched. Full details (palette, motifs, TV/mobile/motion/a11y rules) are in the new **`DESIGN_SYSTEM.md`** — this section covers what changed and how it was verified.
+
+## Visual identity direction
+
+Dark-first, bold, editorial-poster energy for an Arabic party-game platform — electric lime as the primary/electric accent, vivid purple as the secondary accent, cyan as the supporting "in progress/tech" accent, thick outlines + hard offset shadows used sparingly (one focal element per screen), a small original SVG/CSS graphic-motif library instead of any reference art or stock imagery. See `DESIGN_SYSTEM.md`'s "Brand personality" section for the full "must not feel like" checklist this was designed against (no corporate dashboard, no cybersecurity terminal, no Jackbox clone, no reference-art copy).
+
+## Color and typography system
+
+Full palette table and rationale in `DESIGN_SYSTEM.md`. Summary: existing token *names* in `app/globals.css`'s `@theme` block were re-valued (not renamed), so every pre-existing component picked up the new identity without a rename sweep — `brand`→lime, `action`→purple, plus new `cyan`/`ink-on-accent`/hard-shadow tokens. Typography adds **Baloo Bhaijaan 2** (`--font-display`, headings only) and **JetBrains Mono** (`--font-mono`, room codes + a couple of small tech-flavored labels) via `next/font/google`, alongside the unchanged Cairo body font.
+
+## New visual primitives
+
+- **Graphics motif library** (`apps/web/components/graphics/`): `NoiseOverlay`, `PixelGrid`, `GlitchFrame`, `StickerLabel`, `GraphicBurst`, `ComicArrow`, `DecorativeSpark`, `ConnectionPulse`, `HeroIllustration` — all inline SVG/CSS, no image assets, all decorative pieces `aria-hidden`.
+- **`SiteNav`** (`components/nav/SiteNav.tsx`): desktop link row + a single accessible mobile disclosure (never a mega-menu), embedding a compact real `CreateRoomButton` as its always-available CTA.
+- **`GameCard`** and **`IllustratedEmptyState`** (`components/ui/`): the cover-art-style game unit and the honest "not built yet" placeholder used on `/games`/`/account`.
+- `CreateRoomButton` gained optional `size`/`fullWidth` props (default unchanged) so the same real API-calling component can be embedded compactly in the nav.
+
+## Routes redesigned
+
+`/` (full hero/how-it-works/game-preview/final-CTA rebuild), `/games`, `/account`, `app/error.tsx`, `app/not-found.tsx`, `app/global-error.tsx` (inline styles updated to the new hex palette — it can't load Tailwind, since it renders when the root layout itself has failed). **`/join` and `/join/[roomCode]` deliberately do NOT get `SiteNav`** — a deviation from the initial plan, made after noticing the live `PlayerLobby` renders inside that same route once joined; the brief's own "no unnecessary navigation" instruction for the join flow, plus keeping the post-join experience a focused personal controller rather than a chrome-heavy page, argued against it.
+
+## TV lobby changes
+
+`TvScreenLayout` gained a decorative `PixelGrid`/`NoiseOverlay` background layer (kept low-opacity, never reducing roster/room-code contrast). `TvLobby`'s room code now sits inside a `GlitchFrame` (the one dominant focal element), player roster cards use `Panel variant="hard"`, and each player's connection badge gained a `ConnectionPulse` alongside its existing non-color-only status text.
+
+## Player lobby changes
+
+`PlayerLobby` now uses `Panel variant="hard"`, shows a `PlayerAvatar` for the joined player, and states the brief's required copy verbatim ("تم انضمامك، الآن انتظر المضيف") alongside the existing room-code/status text — `join-room-form.tsx`'s name-entry step also explains "جوالك سيصبح أداة التحكم في اللعبة" per the brief. `PostLobbyPlaceholder` gained a `PixelGrid` backdrop and a `LoadingIndicator`. None of these changes touch `usePlayerRealtime`/`useHostRealtime`, session storage, or the FSM-driven phase logic.
+
+## Motion approach
+
+CSS-only — two new keyframes (`pulse-ring`, `float-slow`) in `globals.css`, no animation library added. `ConnectionPulse`'s ring uses `motion-safe:animate-[...]` in addition to the pre-existing global `prefers-reduced-motion` block, so it simply doesn't render motion at all (not just a near-zero duration) under reduced motion.
+
+## Accessibility approach
+
+`StatusBadge` now renders a small shape marker (dot/triangle/×) per tone in addition to color, so "status is never color-only" holds even without `ConnectionPulse`, which is always supplementary. All new decorative graphics are `aria-hidden`. Focus-visible/selection styling continues to use the primary accent token (now lime), and `ink-on-accent` was added specifically so text on the bright lime button/badges keeps real contrast rather than reusing the default off-white `ink`.
+
+## Performance considerations
+
+Zero new image assets or animation libraries — the entire motif library is inline SVG/CSS. `next build` output is unchanged in route shape (still 7 routes, same static/dynamic split).
+
+## Tests added
+
+`apps/web/test/ui/graphics.test.tsx` (decorative components stay `aria-hidden`/non-interactive), `apps/web/test/nav.test.tsx` (SiteNav's links/CTA have accessible names, mobile toggle is keyboard-operable with correct `aria-expanded`/`aria-controls`), `apps/web/test/ui/game-card.test.tsx`. Existing tests were updated only where the redesign's own copy changes required it: `routes.test.tsx`'s home-page test now checks the new hero headline and uses `getAllByRole` (the nav's own always-available "أنشئ غرفة"/"انضم إلى غرفة" now legitimately duplicates those accessible names on `/`); `player-lobby.test.tsx` was updated for the two lines of new copy in `PlayerLobby`; `layout.test.tsx`'s `next/font/google` mock was extended to cover the two new font imports. No test's *intent* changed — only literal copy/queries that the visual redesign itself changed.
+
+## Deferred gameplay work
+
+Unchanged from Step 7C's own list, still entirely out of scope: role reveal/corruption/voting/elimination/results/rematch gameplay UI, Seen Jeem, multi-game registry, PostgreSQL, Prisma, AWS, authentication accounts, Stripe/purchases, production analytics, final logo/character art, large 3D scenes.
+
+## Verification
+
+```
+npm run typecheck                 # 3-stage chain, zero errors, strict mode
+npm test                          # vitest run — 64 files, 387 tests (386 passed, 1 skipped)
+npm --prefix apps/web run lint    # eslint — 0 errors, 1 pre-existing-pattern warning (QrCode.tsx's <img>, unrelated to this step)
+npm --prefix apps/web run build   # next build — succeeds, all 7 routes compile
+```
+
+## Recommended next step
+
+**Development Step 8B — Role reveal and the first real gameplay-phase screens**, unchanged in substance from the Step 7B/7C recommendation — 8A added no new gameplay scope, only the visual identity and product UX everything else now sits inside. Step 8B would build the `ROLE_ASSIGNMENT`/`ROLE_REVEAL` UI on top of the now-restyled `TvScreenLayout`/`PlayerScreenLayout` boundary and `PrivatePlayerPayload` delivery, reusing the new `GlitchFrame`/`StickerLabel`/`ConnectionPulse` primitives rather than introducing a second visual language.
+
+## Step 8A completion
+
+- **Visual identity, palette, typography**: complete — see `DESIGN_SYSTEM.md`.
+- **Graphics motif library, SiteNav, GameCard, IllustratedEmptyState**: complete.
+- **Home/games/account/error/not-found/global-error redesign**: complete.
+- **TV lobby, player lobby, post-lobby placeholder, join flow polish**: complete.
+- **Motion, accessibility, performance**: complete, per `DESIGN_SYSTEM.md`'s rules.
+- **Functional preservation**: complete — no FSM/RoomActor/Redis/WebSocket-auth/session-storage change; all Step 7A/7B API calls unchanged.
+- **Tests**: complete — 386 passing + 1 correctly-skipped (pre-existing).
+- **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
+- **Final logo/character art**: intentionally not implemented — only a temporary SVG/CSS wordmark sticker in `SiteNav`, per scope.
 - Role reveal, gameplay UI, real mini-games, multi-game registry, authentication, payments, PostgreSQL, Prisma, AWS deployment, and Redis schema changes were intentionally **not** started, per the requested scope.

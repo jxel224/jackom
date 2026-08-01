@@ -17,23 +17,24 @@ export default function GlobalError({ reset }: { error: Error & { digest?: strin
           justifyContent: 'center',
           padding: '1.5rem',
           textAlign: 'center',
-          backgroundColor: '#100e1f',
-          color: '#f7f5ff',
+          backgroundColor: '#0a0a14',
+          color: '#f8f5ec',
           fontFamily: 'ui-sans-serif, system-ui, "Segoe UI", sans-serif',
         }}
       >
         <div>
           <h1 style={{ fontSize: '1.5rem', fontWeight: 800, marginBottom: '0.75rem' }}>حدث خطأ غير متوقع</h1>
-          <p style={{ color: '#b3aed1', marginBottom: '1.5rem' }}>نعتذر، حدث خطأ في التطبيق.</p>
+          <p style={{ color: '#a8a2c0', marginBottom: '1.5rem' }}>نعتذر، حدث خطأ في التطبيق.</p>
           <button
             onClick={reset}
             style={{
               borderRadius: '1rem',
               padding: '0.75rem 1.5rem',
-              fontWeight: 700,
-              backgroundColor: '#8b5cf6',
-              color: 'white',
-              border: 'none',
+              fontWeight: 800,
+              border: '3px solid #f8f5ec',
+              boxShadow: '4px 4px 0 0 #f8f5ec',
+              backgroundColor: '#c6ff3d',
+              color: '#0a0a14',
               cursor: 'pointer',
             }}
           >

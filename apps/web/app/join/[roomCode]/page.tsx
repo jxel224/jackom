@@ -16,7 +16,7 @@ export default async function JoinWithCodePage({ params }: { params: Promise<{ r
   const formatValid = isValidRoomCodeFormat(normalized);
 
   return (
-    <PageContainer className="flex min-h-dvh flex-col justify-center gap-6">
+    <PageContainer className="flex min-h-dvh max-w-xl flex-col justify-center gap-6">
       <SectionTitle as="h1">الانضمام إلى غرفة</SectionTitle>
       <JoinRoomForm roomCode={normalized} formatValid={formatValid} />
     </PageContainer>

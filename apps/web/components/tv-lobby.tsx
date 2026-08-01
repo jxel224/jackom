@@ -12,9 +12,10 @@ import { RoomCodeDisplay } from './ui/RoomCodeDisplay';
 import { SectionTitle } from './ui/SectionTitle';
 import { StatusBadge } from './ui/StatusBadge';
 import { buttonClassName } from './ui/button-styles';
+import { ConnectionPulse, GlitchFrame } from './graphics';
 import { PostLobbyPlaceholder } from './post-lobby-placeholder';
 import { useHostRealtime } from '../lib/realtime/useHostRealtime';
-import { describeConnectionState } from '../lib/realtime/connection-status';
+import { describeConnectionState, pulseToneFor } from '../lib/realtime/connection-status';
 import { clearHostSession, type HostSessionRecord } from '../lib/session-storage';
 import { env } from '../lib/env';
 
@@ -51,6 +52,7 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
     return (
       <TvScreenLayout eyebrow="جاكوم">
         <StatusBadge tone={status.tone} live>
+          <ConnectionPulse tone={pulseToneFor(status.tone)} animated={connectionState === 'connected'} />
           {status.label}
         </StatusBadge>
         <PostLobbyPlaceholder />
@@ -64,6 +66,7 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
   return (
     <TvScreenLayout eyebrow="جاكوم">
       <StatusBadge tone={status.tone} live>
+        <ConnectionPulse tone={pulseToneFor(status.tone)} animated={connectionState === 'connected'} />
         {status.label}
       </StatusBadge>
 
@@ -71,10 +74,12 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
         انضموا إلى الغرفة
       </SectionTitle>
 
-      <RoomCodeDisplay code={session.roomCode} />
+      <GlitchFrame accent="brand" className="p-4 sm:p-6">
+        <RoomCodeDisplay code={session.roomCode} />
+      </GlitchFrame>
 
       <div className="grid w-full max-w-2xl grid-cols-1 gap-6 sm:grid-cols-2">
-        <Panel className="flex flex-col items-center gap-3">
+        <Panel variant="hard" className="flex flex-col items-center gap-3">
           <p className="text-tv-sm font-bold text-ink">امسح رمز QR</p>
           {joinUrl ? (
             <QrCode value={joinUrl} size={176} />
@@ -83,21 +88,25 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
           )}
         </Panel>
 
-        <Panel className="flex flex-col items-center gap-3">
+        <Panel variant="hard" className="flex flex-col items-center gap-3">
           <p className="text-tv-sm font-bold text-ink">اللاعبون ({players.length})</p>
           {players.length === 0 ? (
             <p className="text-ink-subtle">بانتظار انضمام اللاعبين...</p>
           ) : (
             <ul className="flex w-full flex-wrap justify-center gap-3">
-              {players.map((player) => (
-                <li key={player.playerId} className="flex flex-col items-center gap-1">
-                  <PlayerAvatar name={player.name} size="lg" />
-                  <span className="max-w-[6rem] truncate text-sm font-semibold text-ink">{player.name}</span>
-                  <StatusBadge tone={player.connectionStatus === 'connected' ? 'success' : 'neutral'}>
-                    {player.connectionStatus === 'connected' ? 'متصل' : player.connectionStatus === 'afk' ? 'غير نشط' : 'غير متصل'}
-                  </StatusBadge>
-                </li>
-              ))}
+              {players.map((player) => {
+                const connected = player.connectionStatus === 'connected';
+                return (
+                  <li key={player.playerId} className="flex flex-col items-center gap-1">
+                    <PlayerAvatar name={player.name} size="lg" />
+                    <span className="max-w-[6rem] truncate text-sm font-semibold text-ink">{player.name}</span>
+                    <StatusBadge tone={connected ? 'success' : 'neutral'}>
+                      <ConnectionPulse tone={connected ? 'success' : 'neutral'} animated={connected} />
+                      {player.connectionStatus === 'connected' ? 'متصل' : player.connectionStatus === 'afk' ? 'غير نشط' : 'غير متصل'}
+                    </StatusBadge>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Panel>

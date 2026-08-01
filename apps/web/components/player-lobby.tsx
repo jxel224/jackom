@@ -5,12 +5,14 @@ import Link from 'next/link';
 import { Button } from './ui/Button';
 import { ErrorMessage } from './ui/ErrorMessage';
 import { Panel } from './ui/Panel';
+import { PlayerAvatar } from './ui/PlayerAvatar';
 import { SectionTitle } from './ui/SectionTitle';
 import { StatusBadge } from './ui/StatusBadge';
 import { buttonClassName } from './ui/button-styles';
+import { ConnectionPulse } from './graphics';
 import { PostLobbyPlaceholder } from './post-lobby-placeholder';
 import { usePlayerRealtime } from '../lib/realtime/usePlayerRealtime';
-import { describeConnectionState } from '../lib/realtime/connection-status';
+import { describeConnectionState, pulseToneFor } from '../lib/realtime/connection-status';
 import { clearPlayerSession, type PlayerSessionRecord } from '../lib/session-storage';
 
 export interface PlayerLobbyProps {
@@ -52,14 +54,18 @@ export function PlayerLobby({ session }: PlayerLobbyProps) {
   const totalPlayers = view ? view.others.length + 1 : null;
 
   return (
-    <Panel className="flex flex-col items-center gap-3 text-center">
-      <SectionTitle as="h2">أهلًا، {session.displayName}!</SectionTitle>
-      <p className="text-ink-muted">تم انضمامك إلى الغرفة {session.roomCode}.</p>
+    <Panel variant="hard" className="flex flex-col items-center gap-4 text-center">
+      <PlayerAvatar name={session.displayName} size="lg" />
+      <SectionTitle as="h2" className="items-center">
+        أهلًا، {session.displayName}!
+      </SectionTitle>
+      <p className="text-ink-muted">تم انضمامك إلى الغرفة {session.roomCode} — جوالك هو أداة التحكم الآن.</p>
       <StatusBadge tone={status.tone} live>
+        <ConnectionPulse tone={pulseToneFor(status.tone)} animated={connectionState === 'connected' || connectionState === 'connecting' || connectionState === 'reconnecting'} />
         {status.label}
       </StatusBadge>
       {totalPlayers !== null ? <p className="text-sm text-ink-subtle">عدد اللاعبين في الغرفة: {totalPlayers}</p> : null}
-      <p className="text-sm text-ink-subtle">انتظر المضيف لبدء اللعبة.</p>
+      <p className="text-sm font-semibold text-ink-subtle">تم انضمامك، الآن انتظر المضيف.</p>
 
       {connectionState === 'failed' || connectionState === 'disconnected' ? (
         <div className="flex flex-col items-center gap-2">

@@ -9,33 +9,49 @@
  * values inline.
  */
 @theme {
-  /* Backgrounds — dark-first, so a shared TV screen stays legible in a dim living room. */
-  --color-surface-0: #100e1f; /* page background */
-  --color-surface-1: #1b1833; /* card / panel background */
-  --color-surface-2: #262146; /* raised panel / hover background */
+  /* Backgrounds — near-black navy, dark-first, so a shared TV screen stays legible in a dim living room. */
+  --color-surface-0: #0a0a14; /* page background */
+  --color-surface-1: #14121f; /* card / panel background */
+  --color-surface-2: #1e1b2e; /* raised panel / hover background */
 
   /* Text hierarchy */
-  --color-ink: #f7f5ff; /* primary text on dark surfaces */
-  --color-ink-muted: #b3aed1; /* secondary text */
-  --color-ink-subtle: #8a83ab; /* tertiary / placeholder text */
+  --color-ink: #f8f5ec; /* warm off-white, primary text on dark surfaces */
+  --color-ink-muted: #a8a2c0; /* cool gray-lavender, secondary text */
+  --color-ink-subtle: #726c8c; /* tertiary / placeholder text */
 
-  /* Brand + accents — playful violet as the brand color, warm coral as the energetic action color. */
-  --color-brand: #8b5cf6;
-  --color-brand-strong: #7c3aed;
-  --color-action: #fb7185;
-  --color-action-strong: #f43f5e;
-  --color-success: #22c55e;
-  --color-danger: #ef4444;
-  --color-warning: #f59e0b;
+  /* Brand + accents — Jackom identity (see DESIGN_SYSTEM.md). `brand` (electric lime) is the loud,
+   * primary/energetic accent: focus rings, glow, primary CTAs, eyebrow labels. `action` (vivid
+   * purple) is the secondary accent for decorative/supporting emphasis. `cyan` is the supporting
+   * "in progress / tech" accent. None of these three should dominate the same screen at once —
+   * pick one dominant + one supporting accent per screen. */
+  --color-brand: #c6ff3d;
+  --color-brand-strong: #a6e01c;
+  --color-action: #9d5cff;
+  --color-action-strong: #8340f0;
+  --color-cyan: #3ce7e1;
+  --color-cyan-strong: #20bfb9;
+  /* Dark text for content sitting on a bright accent background (e.g. the lime primary button) —
+   * white/off-white fails contrast on lime, so this is a deliberate separate token, not ink's opposite. */
+  --color-ink-on-accent: #0a0a14;
+
+  /* Status semantics — deliberately distinct from the decorative brand/action/cyan accents above so
+   * "connected"/"error" always reads unambiguously rather than blending into brand color. */
+  --color-success: #4ade80;
+  --color-danger: #f5304f;
+  --color-warning: #ffc93c;
 
   /* Borders */
-  --color-border: #322b57;
-  --color-border-strong: #433a72;
+  --color-border: #2a263d;
+  --color-border-strong: #3a3452;
 
   /* Arabic-first font stack — `--font-sans` overrides Tailwind's default `font-sans` utility, and
    * next/font's generated `--font-cairo` variable (set on <html> in app/layout.tsx) fills in the
    * actual font files. */
   --font-sans: var(--font-cairo), ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  /* Bold rounded Arabic display font for large headings — see DESIGN_SYSTEM.md. */
+  --font-display: var(--font-baloo), var(--font-cairo), ui-sans-serif, system-ui, sans-serif;
+  /* Latin-only monospace, used narrowly for room codes and small tech-flavored labels. */
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
 
   /* TV-safe typography — legible from across a room. Regular Tailwind text-* sizes remain
    * available for mobile/dense UI; these are for anything shown on the shared host screen. */
@@ -53,6 +69,12 @@
 
   /* One soft "glow" shadow for primary/energetic actions — used sparingly, not on every element. */
   --shadow-glow: 0 8px 30px -6px color-mix(in oklab, var(--color-brand) 55%, transparent);
+
+  /* Comic-style thick offset shadow — used sparingly (primary buttons, GlitchFrame, StickerLabel),
+   * never on every card, per the "controlled chaos in decoration, not navigation" rule. */
+  --shadow-hard: 4px 4px 0 0 var(--color-ink);
+  --shadow-hard-brand: 4px 4px 0 0 var(--color-brand);
+  --shadow-hard-sm: 2px 2px 0 0 var(--color-ink);
 }
 
 @layer base {
@@ -80,7 +102,7 @@
 
   ::selection {
     background-color: var(--color-brand);
-    color: var(--color-ink);
+    color: var(--color-ink-on-accent);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -91,6 +113,59 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.001ms !important;
       scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Decorative background textures used by the graphics motif library (components/graphics/) —
+   * plain CSS gradients/data-URIs, never image assets, so they cost nothing to ship. All are
+   * intended to sit behind content via a lower-stacked `aria-hidden` layer, never as text background. */
+
+  /* Small dot grid — PixelGrid's default surface. Size/color are overridden per-usage via inline
+   * style custom properties (--pixel-grid-color / --pixel-grid-size) rather than new utility classes. */
+  .bg-pixel-grid {
+    --pixel-grid-color: color-mix(in oklab, var(--color-ink) 14%, transparent);
+    --pixel-grid-size: 22px;
+    background-image: radial-gradient(var(--pixel-grid-color) 1.5px, transparent 1.5px);
+    background-size: var(--pixel-grid-size) var(--pixel-grid-size);
+  }
+
+  /* Halftone dot cluster — StickerLabel/GraphicBurst backdrops. */
+  .bg-halftone {
+    --halftone-color: color-mix(in oklab, var(--color-ink) 20%, transparent);
+    background-image: radial-gradient(var(--halftone-color) 2px, transparent 2px);
+    background-size: 10px 10px;
+  }
+
+  /* Film-grain noise — NoiseOverlay. A tiny inline SVG feTurbulence filter as a data URI, tiled. */
+  .bg-grain {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.9);
+      opacity: 0.7;
+    }
+    70% {
+      transform: scale(1.8);
+      opacity: 0;
+    }
+    100% {
+      transform: scale(1.8);
+      opacity: 0;
+    }
+  }
+
+  @keyframes float-slow {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-8px);
     }
   }
 }

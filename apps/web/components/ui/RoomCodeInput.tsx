@@ -64,9 +64,9 @@ export function RoomCodeInput({ value, onChange, label = 'رمز الغرفة', 
         aria-describedby={[hintId, errorId].filter(Boolean).join(' ') || undefined}
         aria-invalid={errorMessage ? true : undefined}
         className={[
-          'h-control rounded-2xl border bg-surface-1 px-4 text-center text-2xl font-black tracking-[0.3em] text-ink placeholder:text-ink-subtle',
+          'h-control rounded-2xl border-[3px] bg-surface-1 px-4 text-center font-mono text-2xl font-black tracking-[0.3em] text-ink placeholder:text-ink-subtle',
           'transition-colors duration-150 ease-out',
-          errorMessage ? 'border-danger' : 'border-border-strong',
+          errorMessage ? 'border-danger' : 'border-ink focus-visible:border-brand',
         ].join(' ')}
       />
       <p id={hintId} className="text-sm text-ink-subtle">{`${ROOM_CODE_LENGTH} أحرف وأرقام إنجليزية`}</p>

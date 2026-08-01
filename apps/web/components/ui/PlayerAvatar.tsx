@@ -31,10 +31,10 @@ export function PlayerAvatar({ name, size = 'md', className = '' }: PlayerAvatar
     <span
       role="img"
       aria-label={name}
-      className={['inline-flex shrink-0 items-center justify-center rounded-full font-extrabold text-white', SIZE_CLASSES[size], className]
+      className={['inline-flex shrink-0 items-center justify-center rounded-full border-2 border-ink font-extrabold text-white', SIZE_CLASSES[size], className]
         .filter(Boolean)
         .join(' ')}
-      style={{ backgroundColor: `hsl(${hue} 65% 45%)` }}
+      style={{ backgroundColor: `hsl(${hue} 70% 48%)` }}
     >
       {initialsFromName(name)}
     </span>

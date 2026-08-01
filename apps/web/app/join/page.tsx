@@ -7,6 +7,7 @@ import { Panel } from '../../components/ui/Panel';
 import { PageContainer } from '../../components/ui/PageContainer';
 import { RoomCodeInput } from '../../components/ui/RoomCodeInput';
 import { SectionTitle } from '../../components/ui/SectionTitle';
+import { DecorativeSpark } from '../../components/graphics';
 import { ROOM_CODE_LENGTH } from '../../lib/shared';
 
 /** Room-code join shell: validates the code locally, then navigates to `/join/[roomCode]`, which does the real availability check + join. */
@@ -27,12 +28,13 @@ export default function JoinPage() {
   };
 
   return (
-    <PageContainer className="flex min-h-dvh flex-col justify-center gap-6">
+    <PageContainer className="relative flex min-h-dvh max-w-xl flex-col justify-center gap-6">
+      <DecorativeSpark size={20} accent="brand" className="absolute right-4 top-0" />
       <SectionTitle as="h1" subtitle={`أدخل رمز الغرفة المكوّن من ${ROOM_CODE_LENGTH} رموز`}>
         انضم إلى غرفة
       </SectionTitle>
 
-      <Panel as="form" className="flex flex-col gap-5" onSubmit={handleSubmit}>
+      <Panel as="form" variant="hard" className="flex flex-col gap-5" onSubmit={handleSubmit}>
         <RoomCodeInput value={code} onChange={setCode} errorMessage={error ?? undefined} />
         <Button type="submit" disabled={!isComplete} fullWidth>
           متابعة

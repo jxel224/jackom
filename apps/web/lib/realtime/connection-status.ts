@@ -1,9 +1,23 @@
 import type { StatusBadgeTone } from '../../components/ui/StatusBadge';
+import type { ConnectionPulseTone } from '../../components/graphics';
 import type { ConnectionState } from './types';
 
 export interface ConnectionStatusDescription {
   label: string;
   tone: StatusBadgeTone;
+}
+
+const PULSE_TONE_BY_BADGE_TONE: Record<StatusBadgeTone, ConnectionPulseTone> = {
+  neutral: 'neutral',
+  info: 'cyan',
+  success: 'success',
+  warning: 'warning',
+  danger: 'danger',
+};
+
+/** Maps a `StatusBadgeTone` to the decorative `ConnectionPulse`'s own tone set — kept as one shared function so the TV and player lobbies stay visually consistent. */
+export function pulseToneFor(tone: StatusBadgeTone): ConnectionPulseTone {
+  return PULSE_TONE_BY_BADGE_TONE[tone];
 }
 
 /**

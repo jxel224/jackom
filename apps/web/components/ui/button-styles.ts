@@ -18,11 +18,14 @@ export interface ButtonClassNameOptions {
   className?: string;
 }
 
+// The primary variant carries the "comic" thick-outline + hard-shadow treatment — a small press
+// effect (shadow shrinks, button nudges toward it) on :active reinforces it as the one dominant
+// action per screen. Secondary/ghost/danger stay flatter so the primary action keeps visual priority.
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: 'bg-action text-white hover:bg-action-strong shadow-glow',
-  secondary: 'bg-surface-2 text-ink border border-border-strong hover:bg-surface-1',
+  primary: 'border-[3px] border-ink bg-brand text-ink-on-accent shadow-hard hover:bg-brand-strong active:translate-x-[2px] active:translate-y-[2px] active:shadow-hard-sm',
+  secondary: 'border border-border-strong bg-surface-2 text-ink hover:bg-surface-1',
   ghost: 'bg-transparent text-ink hover:bg-surface-2',
-  danger: 'bg-danger text-white hover:brightness-90',
+  danger: 'border-[3px] border-ink bg-danger text-white shadow-hard-sm hover:brightness-95 active:translate-x-[1px] active:translate-y-[1px] active:shadow-none',
 };
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
@@ -33,8 +36,8 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
 
 export function buttonClassName({ variant = 'primary', size = 'md', fullWidth = false, disabled = false, className = '' }: ButtonClassNameOptions = {}): string {
   return [
-    'inline-flex items-center justify-center gap-2 rounded-2xl font-bold',
-    'transition-colors duration-150 ease-out',
+    'inline-flex items-center justify-center gap-2 rounded-2xl font-extrabold',
+    'transition-[background-color,box-shadow,transform] duration-150 ease-out',
     disabled ? 'pointer-events-none cursor-not-allowed opacity-50 shadow-none' : '',
     fullWidth ? 'w-full' : '',
     VARIANT_CLASSES[variant],

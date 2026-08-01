@@ -43,7 +43,7 @@ export function QrCode({ value, size = 200, className = '' }: QrCodeProps) {
     };
   }, [value, size]);
 
-  const boxClassName = ['flex items-center justify-center rounded-2xl border-2 border-dashed border-border-strong p-2', className].filter(Boolean).join(' ');
+  const boxClassName = ['flex items-center justify-center rounded-2xl border-2 border-dashed border-ink-subtle p-2', className].filter(Boolean).join(' ');
 
   if (failed) {
     return (
@@ -61,5 +61,13 @@ export function QrCode({ value, size = 200, className = '' }: QrCodeProps) {
     );
   }
 
-  return <img src={dataUrl} alt={`رمز QR للانضمام إلى الغرفة عبر الرابط ${value}`} width={size} height={size} className={['rounded-2xl bg-white p-2', className].filter(Boolean).join(' ')} />;
+  return (
+    <img
+      src={dataUrl}
+      alt={`رمز QR للانضمام إلى الغرفة عبر الرابط ${value}`}
+      width={size}
+      height={size}
+      className={['rounded-2xl border-[3px] border-ink bg-white p-2 shadow-hard-sm', className].filter(Boolean).join(' ')}
+    />
+  );
 }

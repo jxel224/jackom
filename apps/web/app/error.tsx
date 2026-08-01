@@ -20,7 +20,7 @@ export default function Error({ error, reset }: { error: Error & { digest?: stri
 
   return (
     <PageContainer className="flex min-h-dvh flex-col items-center justify-center">
-      <Panel className="flex w-full max-w-md flex-col items-center gap-4 text-center">
+      <Panel variant="hard" className="flex w-full max-w-md flex-col items-center gap-4 text-center">
         <SectionTitle as="h1">حدث خطأ غير متوقع</SectionTitle>
         <ErrorMessage message="نعتذر، حدث خطأ أثناء تحميل هذه الصفحة." />
         <Button onClick={reset}>حاول مرة أخرى</Button>

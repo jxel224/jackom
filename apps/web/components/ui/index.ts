@@ -4,7 +4,9 @@ export { Button, type ButtonProps } from './Button';
 // Component pages that need the plain style string import it from this client-free module instead.
 export { buttonClassName, type ButtonVariant, type ButtonSize, type ButtonClassNameOptions } from './button-styles';
 export { Input, type InputProps } from './Input';
-export { Panel, type PanelProps } from './Panel';
+export { Panel, type PanelProps, type PanelVariant } from './Panel';
+export { GameCard, type GameCardProps } from './GameCard';
+export { IllustratedEmptyState, type IllustratedEmptyStateProps } from './IllustratedEmptyState';
 export { PageContainer, type PageContainerProps } from './PageContainer';
 export { StatusBadge, type StatusBadgeProps, type StatusBadgeTone } from './StatusBadge';
 export { Modal, type ModalProps } from './Modal';

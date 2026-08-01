@@ -25,9 +25,11 @@ afterEach(() => {
 describe('Core route shells render without crashing', () => {
   it('/ (landing) — "أنشئ غرفة" is a real interactive button, not a plain link', () => {
     render(<HomePage />);
-    expect(screen.getByRole('heading', { level: 1, name: 'العبوا معًا، من أي شاشة' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'أنشئ غرفة' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'انضم إلى غرفة' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'اللعب يبدأ من الشاشة… والفوضى تبدأ من جوالاتكم.' })).toBeTruthy();
+    // The nav also carries its own always-available "أنشئ غرفة" CTA, so more than one real button
+    // shares this accessible name on this page — assert at least one exists rather than exactly one.
+    expect(screen.getAllByRole('button', { name: 'أنشئ غرفة' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'انضم إلى غرفة' }).length).toBeGreaterThan(0);
   });
 
   it('/games', () => {

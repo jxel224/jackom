@@ -57,8 +57,8 @@ describe('PlayerLobby', () => {
     render(<PlayerLobby session={session} />);
 
     expect(screen.getByText('أهلًا، سارة!')).toBeTruthy();
-    expect(screen.getByText('تم انضمامك إلى الغرفة ABCD12.')).toBeTruthy();
-    expect(screen.getByText('انتظر المضيف لبدء اللعبة.')).toBeTruthy();
+    expect(screen.getByText('تم انضمامك إلى الغرفة ABCD12 — جوالك هو أداة التحكم الآن.')).toBeTruthy();
+    expect(screen.getByText('تم انضمامك، الآن انتظر المضيف.')).toBeTruthy();
   });
 
   it('shows the current player count once PlayerView allows it', () => {
@@ -81,7 +81,7 @@ describe('PlayerLobby', () => {
     render(<PlayerLobby session={session} />);
 
     expect(screen.getByText('بدأت اللعبة')).toBeTruthy();
-    expect(screen.queryByText('انتظر المضيف لبدء اللعبة.')).toBeNull();
+    expect(screen.queryByText('تم انضمامك، الآن انتظر المضيف.')).toBeNull();
   });
 
   it('an unauthorized connection clears the stored player session and offers a way to rejoin', () => {
