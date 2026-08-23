@@ -23,11 +23,21 @@ const MINIMAL_PLAYER_VIEW: PlayerView = {
   self: { playerId: 'player-1', name: 'سارة', avatarId: 'default', alive: true, connectionStatus: 'connected' },
   others: [],
   phase: { state: 'LOBBY', phaseId: 'p1', phaseStartedAt: 0, durationMs: null },
+  adminId: null,
   isParticipantThisRound: false,
+  isAdmin: false,
+  adminSelection: null,
+  hackerInfo: null,
+  matchClock: { status: 'pending', clockId: '', startedAt: null, deadlineAt: null, remainingMs: 0, totalPenaltyMs: 0 },
   minigameView: null,
-  canVote: false,
   canAct: false,
+  hackerCount: 0,
+  canPushButton: false,
+  accusation: null,
+  accusationCooldownUntil: null,
   lastRoundResult: null,
+  winner: null,
+  finalReveal: null,
 };
 
 afterEach(() => {

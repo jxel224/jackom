@@ -27,4 +27,12 @@ export const ApiErrors = {
   duplicatePlayer: (message = 'تم استلام طلب مطابق مسبقًا بمعرّف مختلف.') => new ApiError(409, 'DUPLICATE_PLAYER', message),
   rateLimited: (message = 'محاولات كثيرة جدًا. حاول مرة أخرى بعد قليل.') => new ApiError(429, 'RATE_LIMITED', message),
   internal: (message = 'حدث خطأ في الخادم. حاول مرة أخرى.') => new ApiError(500, 'INTERNAL_ERROR', message),
+  // Permanent Business Backend (Users/Auth/Ownership) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md.
+  emailAlreadyRegistered: (message = 'هذا البريد الإلكتروني مسجّل بالفعل.') => new ApiError(409, 'EMAIL_ALREADY_REGISTERED', message),
+  /** Deliberately the SAME error for "no such account" and "wrong password" — never lets a client distinguish which (PART 20 security review). */
+  invalidCredentials: (message = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.') => new ApiError(401, 'INVALID_CREDENTIALS', message),
+  unauthenticated: (message = 'يجب تسجيل الدخول أولًا.') => new ApiError(401, 'UNAUTHENTICATED', message),
+  gameNotFound: (message = 'اللعبة غير موجودة.') => new ApiError(404, 'GAME_NOT_FOUND', message),
+  gameNotActive: (message = 'هذه اللعبة غير متاحة حاليًا.') => new ApiError(409, 'GAME_NOT_ACTIVE', message),
+  gameNotOwned: (message = 'أنت لا تملك هذه اللعبة.') => new ApiError(403, 'GAME_NOT_OWNED', message),
 };

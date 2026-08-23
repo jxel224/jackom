@@ -22,6 +22,7 @@ export function isStalePhase(room: RoomState, event: InboundEvent): boolean {
  */
 const SYSTEM_EVENT_TYPES = new Set<InboundEvent['type']>([
   'timer:expired',
+  'matchClock:expired',
   'player:disconnected',
   'player:reconnected',
   'host:graceExpired',

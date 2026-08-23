@@ -1,0 +1,91 @@
+// Permanent business-data schema (PostgreSQL) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md.
+// Deliberately small: only what the permanent-account/ownership backend needs today. Realtime
+// match state (rooms, Players, roles, timers, hacks, minigame answers, Bomb Protocol, accusations)
+// lives entirely in Redis via the existing RoomActor architecture and is NEVER modeled here —
+// see apps/server/src/persistence/ for that boundary. Purchases/Stripe/match history are
+// deliberately not modeled yet (explicitly out of scope for this phase).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A permanent host/purchaser account. Distinct from a Player (a temporary, account-free realtime
+/// match participant living in Redis) — see the "User != Player" boundary in
+/// PERMANENT_BACKEND_FOUNDATION_REPORT.md. `email` is always stored lowercased/trimmed by the
+/// application layer (auth-service.ts) before it ever reaches this table, so the plain @unique
+/// constraint here is sufficient for normalized-email uniqueness without a citext extension.
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ownerships GameOwnership[]
+  sessions   Session[]
+
+  @@map("users")
+}
+
+/// One purchasable/hostable game on the platform. Only HACKERS exists today (seeded) — the model
+/// exists at the platform level (not hardcoded to one game) because the product roadmap has four
+/// standalone games; building the other three is explicitly out of scope for this phase.
+model Game {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownerships GameOwnership[]
+
+  @@map("games")
+}
+
+/// The User<->Game many-to-many join, with the ownership-specific fields the platform actually
+/// needs (when it was granted, and by what — a real Stripe purchase later, or a dev/test grant now).
+/// `@@unique([userId, gameId])` enforces "a User cannot own the same Game twice" at the DATABASE
+/// level, not merely in application code — this is the exact invariant the closure spec requires.
+model GameOwnership {
+  id         String   @id @default(uuid())
+  userId     String
+  gameId     String
+  grantedAt  DateTime @default(now())
+  /// Free-form provenance string (e.g. "dev-grant", "stripe" once that exists later) — never parsed,
+  /// purely for audit/debugging. Null is a legitimate "unknown/legacy" value, not an error state.
+  source     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gameId])
+  @@index([userId])
+  @@map("game_ownerships")
+}
+
+/// Database-backed authentication session. Only `tokenHash` (never the raw bearer token) is stored
+/// — see auth-service.ts for why: a database read/leak alone can never grant a session, since the
+/// raw token half only ever exists in the HttpOnly cookie and the request that briefly carries it.
+/// Deliberately NOT the same concept as the existing Redis-backed HostSessionRecord/PlayerSessionRecord
+/// (apps/server/src/persistence/session-repo.ts) — those are ephemeral, per-room realtime gameplay
+/// sessions; this is the permanent account's login session. Different lifetimes, different stores,
+/// different trust boundaries, deliberately never merged.
+model Session {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("auth_sessions")
+}

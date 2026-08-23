@@ -3,7 +3,11 @@ import { startTestHttpApi, requestJson, type TestHttpApiSetup } from '../helpers
 import type { ApiErrorPayload, CreateRoomResponseBody, RoomAvailabilityResponseBody } from '../../src/shared.js';
 
 async function createRoom(setup: TestHttpApiSetup) {
-  const res = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, { method: 'POST', body: '{}' });
+  const res = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, {
+    method: 'POST',
+    headers: { Cookie: setup.defaultHost.cookieHeader },
+    body: JSON.stringify({ gameSlug: setup.defaultGameSlug }),
+  });
   return res.body;
 }
 
@@ -21,7 +25,7 @@ describe('GET /api/rooms/:roomCode', () => {
     const room = await createRoom(setup);
     const res = await requestJson<RoomAvailabilityResponseBody>(`${setup.baseUrl}/api/rooms/${room.roomCode}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ roomCode: room.roomCode, joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 5, maxPlayers: 12 });
+    expect(res.body).toEqual({ roomCode: room.roomCode, joinable: true, full: false, matchStarted: false, playerCount: 0, minPlayers: 4, maxPlayers: 10 });
   });
 
   it('resolves regardless of case (lowercase input normalizes to the stored uppercase code)', async () => {

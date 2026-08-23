@@ -5,7 +5,7 @@ import type { ApiErrorPayload, CreateRoomResponseBody } from '../../src/shared.j
 describe('HTTP rate limiting (in-memory, single-instance only — see IMPLEMENTATION_PROGRESS.md Step 7A)', () => {
   it('16. returns a typed 429 RATE_LIMITED response once the per-IP limit is exceeded', async () => {
     const setup = await startTestHttpApi({ rateLimitMaxRequests: 2, rateLimitWindowMs: 60_000 });
-    const attempt = () => requestJson<CreateRoomResponseBody | ApiErrorPayload>(`${setup.baseUrl}/api/rooms`, { method: 'POST', body: '{}' });
+    const attempt = () => requestJson<CreateRoomResponseBody | ApiErrorPayload>(`${setup.baseUrl}/api/rooms`, { method: 'POST', headers: { Cookie: setup.defaultHost.cookieHeader }, body: JSON.stringify({ gameSlug: setup.defaultGameSlug }) });
 
     const first = await attempt();
     const second = await attempt();
@@ -21,7 +21,7 @@ describe('HTTP rate limiting (in-memory, single-instance only — see IMPLEMENTA
 
   it('rate limiting also applies to the join endpoint, sharing one per-IP bucket with create-room', async () => {
     const setup = await startTestHttpApi({ rateLimitMaxRequests: 3, rateLimitWindowMs: 60_000 });
-    const created = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, { method: 'POST', body: '{}' }); // consumes 1 of 3
+    const created = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, { method: 'POST', headers: { Cookie: setup.defaultHost.cookieHeader }, body: JSON.stringify({ gameSlug: setup.defaultGameSlug }) }); // consumes 1 of 3
 
     const join = () =>
       requestJson<ApiErrorPayload>(`${setup.baseUrl}/api/rooms/${created.body.roomCode}/players`, {
@@ -43,7 +43,7 @@ describe('HTTP rate limiting (in-memory, single-instance only — see IMPLEMENTA
 
   it('the GET availability check is not rate-limited (only create/join are, per the brief)', async () => {
     const setup = await startTestHttpApi({ rateLimitMaxRequests: 1, rateLimitWindowMs: 60_000 });
-    const created = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, { method: 'POST', body: '{}' }); // consumes the only allowed request
+    const created = await requestJson<CreateRoomResponseBody>(`${setup.baseUrl}/api/rooms`, { method: 'POST', headers: { Cookie: setup.defaultHost.cookieHeader }, body: JSON.stringify({ gameSlug: setup.defaultGameSlug }) }); // consumes the only allowed request
 
     const availability1 = await requestJson(`${setup.baseUrl}/api/rooms/${created.body.roomCode}`);
     const availability2 = await requestJson(`${setup.baseUrl}/api/rooms/${created.body.roomCode}`);

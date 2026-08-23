@@ -19,12 +19,33 @@ export type ApiErrorCode =
   | 'INVALID_DISPLAY_NAME'
   | 'DUPLICATE_PLAYER'
   | 'RATE_LIMITED'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  // Permanent Business Backend (Users/Auth/Ownership) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md.
+  | 'INVALID_EMAIL'
+  | 'WEAK_PASSWORD'
+  | 'INVALID_DISPLAY_NAME_LENGTH'
+  | 'EMAIL_ALREADY_REGISTERED'
+  | 'INVALID_CREDENTIALS'
+  | 'UNAUTHENTICATED'
+  | 'GAME_NOT_FOUND'
+  | 'GAME_NOT_ACTIVE'
+  | 'GAME_NOT_OWNED';
 
 /** The ONLY shape an error response body ever takes — never a stack trace, Redis error, or raw exception message. */
 export interface ApiErrorPayload {
   code: ApiErrorCode;
   message: string;
+}
+
+/**
+ * POST /api/rooms request. `gameSlug` is required (Permanent Business Backend) — the server
+ * verifies the caller is authenticated (a valid auth session cookie) AND owns an active Game with
+ * this slug before creating any Redis room state; see `db/services/ownership-service.ts`. Guest
+ * players joining an existing room (`POST /api/rooms/:code/players`) are completely unaffected —
+ * this requirement applies only to room CREATION, i.e. hosting.
+ */
+export interface CreateRoomRequestBody {
+  gameSlug: string;
 }
 
 /** POST /api/rooms response. `tv` is a normal `TvView` projection (never raw `RoomState`) — safe to render immediately on `/tv`. */
@@ -62,4 +83,50 @@ export interface JoinRoomResponseBody {
   playerId: string;
   playerSessionToken: string;
   view: PlayerView;
+}
+
+// ---- Permanent Business Backend: Users / Authentication / Ownership ---------------------------
+// A User is a permanent host/purchaser account — completely distinct from a Player (a temporary,
+// account-free realtime match participant; see JoinRoomRequestBody/JoinRoomResponseBody above,
+// which remain entirely untouched by any of this). See PERMANENT_BACKEND_FOUNDATION_REPORT.md.
+
+/** Everything about a User that is ever safe to send to any client — never `passwordHash`. */
+export interface SafeUser {
+  id: string;
+  email: string;
+  displayName: string;
+  createdAt: string;
+}
+
+export interface RegisterRequestBody {
+  email: string;
+  password: string;
+  displayName: string;
+}
+
+export interface LoginRequestBody {
+  email: string;
+  password: string;
+}
+
+/** POST /api/auth/register and POST /api/auth/login both respond with this — the session itself travels only as an HttpOnly cookie, never in this body. */
+export interface AuthResponseBody {
+  user: SafeUser;
+}
+
+/** GET /api/auth/me response when authenticated (401 UNAUTHENTICATED otherwise — there is no 200-with-null shape). */
+export interface MeResponseBody {
+  user: SafeUser;
+}
+
+export interface OwnedGameSummary {
+  id: string;
+  slug: string;
+  name: string;
+  isActive: boolean;
+}
+
+/** GET /api/games/owned response — only the games the authenticated caller actually owns, never any other User's ownership records. */
+export interface OwnedGamesResponseBody {
+  games: OwnedGameSummary[];
 }

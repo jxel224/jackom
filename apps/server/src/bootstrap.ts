@@ -12,11 +12,19 @@ import { KeyValueSessionRepository } from './persistence/session-repo.js';
 import { consoleRoomLogger, type RoomLogger } from './persistence/logging.js';
 import { RoomActorManager } from './actors/room-actor-manager.js';
 import { PhaseTimerService } from './timers/phase-timer-service.js';
+import { MatchClockService } from './timers/match-clock-service.js';
 import { RealTimerScheduler } from './timers/real-timer-scheduler.js';
 import { HttpApiServer } from './http/http-api-server.js';
 import { GatewayServer } from './gateway/gateway-server.js';
 import type { ServerEnvConfig } from './env.js';
 import { redactRedisUrl } from './env.js';
+import { AuthService } from './db/services/auth-service.js';
+import { OwnershipService } from './db/services/ownership-service.js';
+import { createPrismaClient, type PrismaClient } from './db/client.js';
+import { PrismaUserRepository } from './db/repositories/user-repository.js';
+import { PrismaGameRepository } from './db/repositories/game-repository.js';
+import { PrismaOwnershipRepository } from './db/repositories/ownership-repository.js';
+import { PrismaAuthSessionRepository } from './db/repositories/auth-session-repository.js';
 
 /**
  * Development Step 7C's local runner bootstrap — split into small, independently testable pieces
@@ -39,6 +47,24 @@ export class RedisUnavailableError extends Error {
 }
 
 /**
+ * Attaches a long-lived `'error'` listener to a live-for-the-life-of-the-process Redis client
+ * (fixed in this phase — GAMEPLAY_RULES_V1.md §9 / FUNCTIONAL_GAME_AUDIT.md P0 #7). `EventEmitter`
+ * throws an unlistened `'error'` event as an uncaught exception, and ioredis emits exactly that
+ * event for connection-level problems (a restart, a network blip) independent of any individual
+ * command's promise rejecting. Without this, the first such blip crashes the whole process,
+ * bypassing every command-level `RepositoryError` this codebase otherwise handles carefully. This
+ * only logs and swallows — command-level failures are still surfaced as typed errors exactly as
+ * before; this never pretends a failed write succeeded. Extracted as its own function (rather than
+ * inlined in `connectToRedis`) so it's unit-testable without needing a live Redis connection.
+ */
+export function attachRedisErrorHandler(client: Redis, logger: RoomLogger = consoleRoomLogger): void {
+  client.on('error', (err: unknown) => {
+    const errorKind = err instanceof Error ? err.constructor.name : typeof err;
+    logger({ roomId: 'redis', event: 'redis_connection_error', detail: { errorKind } });
+  });
+}
+
+/**
  * Connects to Redis with a bounded timeout and a clear, actionable error on failure — never falls
  * back to an in-memory store for a real run (that fallback exists only in the test suite, via
  * `InMemoryKeyValueStore`, and is never wired into this file).
@@ -48,9 +74,10 @@ export class RedisUnavailableError extends Error {
  * reachability check already uses) purely to make THIS bounded startup check deterministic, then
  * hands back a SEPARATE, normal client (ioredis's default reconnect-with-backoff behavior) for
  * actual runtime use — a real Redis blip later shouldn't kill a long-running dev process the way it
- * should fail this one-time startup check.
+ * should fail this one-time startup check. The returned runtime client always has
+ * `attachRedisErrorHandler` applied — see that function for why this matters.
  */
-export async function connectToRedis(redisUrl: string, connectTimeoutMs = 3000): Promise<Redis> {
+export async function connectToRedis(redisUrl: string, connectTimeoutMs = 3000, logger: RoomLogger = consoleRoomLogger): Promise<Redis> {
   const probe = new Redis(redisUrl, { lazyConnect: true, retryStrategy: () => null, connectTimeout: connectTimeoutMs });
   probe.on('error', () => {}); // avoid noisy unhandled 'error' events while we're still deciding whether to give up
   try {
@@ -62,7 +89,50 @@ export async function connectToRedis(redisUrl: string, connectTimeoutMs = 3000):
   }
   probe.disconnect();
 
-  return new Redis(redisUrl);
+  const runtimeClient = new Redis(redisUrl);
+  attachRedisErrorHandler(runtimeClient, logger);
+  return runtimeClient;
+}
+
+export class DatabaseUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(
+      'Could not connect to PostgreSQL. Is it running? ' +
+        'See LOCAL_DEVELOPMENT.md for how to start it (`npm run dev:db`, or a locally installed PostgreSQL) — never falls back to an in-memory store for a real run.',
+      { cause },
+    );
+    this.name = 'DatabaseUnavailableError';
+  }
+}
+
+/** Same bounded-startup-check idiom as `connectToRedis` — mirrors it exactly (see that function's doc comment) for the exact same reason: fail fast and clearly, rather than a mysterious first-query timeout minutes into a run. */
+export async function connectToDatabase(databaseUrl: string): Promise<PrismaClient> {
+  const prisma = createPrismaClient(databaseUrl);
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (cause) {
+    await prisma.$disconnect().catch(() => {});
+    throw new DatabaseUnavailableError(cause);
+  }
+  return prisma;
+}
+
+export interface BusinessServices {
+  authService: AuthService;
+  ownershipService: OwnershipService;
+}
+
+/** Wires the repository → service layers (PART 10) — the only place they're constructed for a real run. */
+export function buildBusinessServices(prisma: PrismaClient, sessionTokenSecret: string, sessionTtlSeconds: number): BusinessServices {
+  const userRepo = new PrismaUserRepository(prisma);
+  const authSessionRepo = new PrismaAuthSessionRepository(prisma);
+  const gameRepo = new PrismaGameRepository(prisma);
+  const ownershipRepo = new PrismaOwnershipRepository(prisma);
+
+  return {
+    authService: new AuthService(userRepo, authSessionRepo, { sessionTokenSecret, sessionTtlSeconds }),
+    ownershipService: new OwnershipService(gameRepo, ownershipRepo),
+  };
 }
 
 export interface ProductionRepos {
@@ -86,11 +156,12 @@ export function buildProductionRepos(redisClient: Redis): ProductionRepos {
 export interface JackomRuntime {
   manager: RoomActorManager;
   timerService: PhaseTimerService;
+  matchClockService: MatchClockService;
   httpApi: HttpApiServer;
   gateway: GatewayServer;
   httpApiPort: number;
   wsGatewayPort: number;
-  /** Closes the HTTP API, the WebSocket gateway (which also shuts the timer service down), in that order. Idempotent-safe to call once. */
+  /** Closes the HTTP API, the WebSocket gateway (which also shuts both timer services down), stops the idle-actor sweep, in that order. Idempotent-safe to call once. */
   close(): Promise<void>;
 }
 
@@ -120,20 +191,37 @@ function isAddrInUse(err: unknown): boolean {
 export interface CreateJackomRuntimeOptions {
   repos: ProductionRepos;
   fsmDeps: Deps;
-  env: Pick<ServerEnvConfig, 'httpApiPort' | 'wsGatewayPort' | 'roomTtlSeconds' | 'allowedOrigins'>;
+  env: Pick<
+    ServerEnvConfig,
+    | 'httpApiPort'
+    | 'wsGatewayPort'
+    | 'roomTtlSeconds'
+    | 'allowedOrigins'
+    | 'idleActorEvictionIntervalMs'
+    | 'idleActorThresholdMs'
+    | 'sessionCookieSecure'
+    | 'sessionTtlSeconds'
+  >;
   logger?: RoomLogger;
+  /** Permanent Business Backend — optional so existing tests that only exercise realtime gameplay (no Postgres) keep constructing a runtime unchanged. A real `main.ts` run always provides both. */
+  authService?: AuthService;
+  ownershipService?: OwnershipService;
 }
 
 /**
  * Builds ONE shared `RoomActorManager` and hands it to both the HTTP API and the WebSocket gateway
  * — the same "single authoritative room manager, two entry points" shape
  * `http-gateway-integration.test.ts` already proves works, just wired for a real, long-running local
- * process instead of a test. `PhaseTimerService` is constructed exactly once here and registers
- * itself as the manager's lifecycle hooks in its own constructor (Step 5) — there is structurally no
- * path in this function that could create a second one for the same runtime.
+ * process instead of a test. `PhaseTimerService` and `MatchClockService` are each constructed
+ * exactly once here and register themselves as the manager's lifecycle hooks in their own
+ * constructors (`RoomActorManager.setLifecycleHooks` now accumulates rather than replaces — see
+ * CORE_LOGIC_PHASE1_REPORT.md §5 — so the two coexist without either one clobbering the other's
+ * registration). Also starts a periodic idle-actor sweep (GAMEPLAY_RULES_V1.md §9): `unref()`'d so
+ * it never blocks process shutdown, and it only ever drops in-memory actors — Redis-persisted room
+ * state is untouched, and touching the room again later transparently rehydrates it.
  */
 export async function createJackomRuntime(options: CreateJackomRuntimeOptions): Promise<JackomRuntime> {
-  const { repos, fsmDeps, env } = options;
+  const { repos, fsmDeps, env, authService, ownershipService } = options;
   const logger = options.logger ?? consoleRoomLogger;
 
   const manager = new RoomActorManager({
@@ -153,10 +241,31 @@ export async function createJackomRuntime(options: CreateJackomRuntimeOptions): 
     logger,
   });
 
+  const matchClockService = new MatchClockService({
+    manager,
+    createScheduler: (onExpire) => new RealTimerScheduler(onExpire, fsmDeps.now),
+    now: fsmDeps.now,
+    logger,
+  });
+
+  const idleEvictionTimer: ReturnType<typeof setInterval> = setInterval(() => {
+    manager.evictIdle(env.idleActorThresholdMs);
+  }, env.idleActorEvictionIntervalMs);
+  idleEvictionTimer.unref?.();
+
   const sharedDeps = { roomActorManager: manager, roomLookupRepo: repos.roomLookupRepo, sessionRepo: repos.sessionRepo, fsmDeps };
 
-  const httpApi = new HttpApiServer(sharedDeps, { allowedOrigins: env.allowedOrigins, ttlSeconds: env.roomTtlSeconds, logger });
-  const gateway = new GatewayServer({ ...sharedDeps, timerService }, { ttlSeconds: env.roomTtlSeconds, logger });
+  const httpApi = new HttpApiServer(
+    { ...sharedDeps, authService, ownershipService },
+    {
+      allowedOrigins: env.allowedOrigins,
+      ttlSeconds: env.roomTtlSeconds,
+      logger,
+      sessionCookieSecure: env.sessionCookieSecure,
+      sessionTtlSeconds: env.sessionTtlSeconds,
+    },
+  );
+  const gateway = new GatewayServer({ ...sharedDeps, timerService, matchClockService }, { ttlSeconds: env.roomTtlSeconds, logger });
 
   const httpApiPort = await listenOrClearError('HTTP API', env.httpApiPort, (p) => httpApi.listen(p));
   let wsGatewayPort: number;
@@ -170,13 +279,15 @@ export async function createJackomRuntime(options: CreateJackomRuntimeOptions): 
   return {
     manager,
     timerService,
+    matchClockService,
     httpApi,
     gateway,
     httpApiPort,
     wsGatewayPort,
     async close() {
+      clearInterval(idleEvictionTimer);
       await httpApi.close();
-      await gateway.close(); // also calls timerService.shutdown()
+      await gateway.close(); // also calls timerService.shutdown() and matchClockService.shutdown()
     },
   };
 }

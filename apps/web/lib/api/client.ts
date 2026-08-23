@@ -1,5 +1,18 @@
 import { env } from '../env';
-import type { ApiErrorCode, ApiErrorPayload, CreateRoomResponseBody, JoinRoomRequestBody, JoinRoomResponseBody, RoomAvailabilityResponseBody } from '../shared';
+import type {
+  ApiErrorCode,
+  ApiErrorPayload,
+  AuthResponseBody,
+  CreateRoomRequestBody,
+  CreateRoomResponseBody,
+  JoinRoomRequestBody,
+  JoinRoomResponseBody,
+  LoginRequestBody,
+  MeResponseBody,
+  OwnedGamesResponseBody,
+  RegisterRequestBody,
+  RoomAvailabilityResponseBody,
+} from '../shared';
 
 /**
  * The one typed HTTP boundary between the frontend and Development Step 7A's room-create/join API
@@ -37,6 +50,10 @@ async function apiRequest<T>(path: string, init: RequestInit = {}, timeoutMs = D
     response = await fetch(`${env.NEXT_PUBLIC_API_URL}${path}`, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+      // Permanent Business Backend: the auth session travels as an HttpOnly cookie — every request
+      // (not just /api/auth/*) must include it so the server can recognize an already-logged-in
+      // caller. Harmless for the pre-existing gameplay endpoints, which never read cookies at all.
+      credentials: 'include',
       signal: controller.signal,
     });
   } catch (err) {
@@ -66,8 +83,9 @@ async function apiRequest<T>(path: string, init: RequestInit = {}, timeoutMs = D
   return parsed as T;
 }
 
-export function createRoom(): Promise<CreateRoomResponseBody> {
-  return apiRequest<CreateRoomResponseBody>('/api/rooms', { method: 'POST', body: '{}' });
+/** Permanent Business Backend: requires the caller to be authenticated and own an active `gameSlug` — the server is the one true gate; a rejected call throws ApiClientError with code GAME_NOT_OWNED/GAME_NOT_ACTIVE/GAME_NOT_FOUND/UNAUTHENTICATED. */
+export function createRoom(body: CreateRoomRequestBody): Promise<CreateRoomResponseBody> {
+  return apiRequest<CreateRoomResponseBody>('/api/rooms', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export function getRoomAvailability(roomCode: string): Promise<RoomAvailabilityResponseBody> {
@@ -79,4 +97,27 @@ export function joinRoom(roomCode: string, body: JoinRoomRequestBody): Promise<J
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+// ---- Permanent Business Backend: auth + ownership --------------------------------------------
+
+export function registerAccount(body: RegisterRequestBody): Promise<AuthResponseBody> {
+  return apiRequest<AuthResponseBody>('/api/auth/register', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function login(body: LoginRequestBody): Promise<AuthResponseBody> {
+  return apiRequest<AuthResponseBody>('/api/auth/login', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function logout(): Promise<{ ok: true }> {
+  return apiRequest<{ ok: true }>('/api/auth/logout', { method: 'POST', body: '{}' });
+}
+
+/** Throws ApiClientError with code UNAUTHENTICATED (401) when no valid session exists — callers distinguish "logged out" from a real network/server error via `err.code`. */
+export function getCurrentUser(): Promise<MeResponseBody> {
+  return apiRequest<MeResponseBody>('/api/auth/me', { method: 'GET' });
+}
+
+export function getOwnedGames(): Promise<OwnedGamesResponseBody> {
+  return apiRequest<OwnedGamesResponseBody>('/api/games/owned', { method: 'GET' });
 }

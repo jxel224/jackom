@@ -5,8 +5,10 @@ import { env } from '../env';
 import type { PlayerSessionRecord } from '../session-storage';
 import { RealtimeSocket } from './realtime-socket';
 import { PlayerViewPayloadSchema, PrivatePlayerPayloadSchema } from './wire-schemas';
+import { arabicMessageForRejectionCode } from './rejection-messages';
 import type { ConnectionState } from './types';
 import type { DisplayError, PlayerView, PrivatePlayerPayload } from './public-types';
+import type { JsonValue } from '../shared';
 
 export interface UsePlayerRealtimeResult {
   connectionState: ConnectionState;
@@ -14,6 +16,18 @@ export interface UsePlayerRealtimeResult {
   /** Scoped strictly to this authenticated connection — never another player's payload, never cached across a session change. */
   privateInfo: PrivatePlayerPayload | null;
   connectionError: DisplayError | null;
+  actionPending: boolean;
+  actionError: DisplayError | null;
+  submitMinigameAction: (actionType: string, data: JsonValue) => boolean;
+  /**
+   * Sends any other real, server-defined `player:*` event for the current phase (Admin selection,
+   * hack submission, push-the-button, accusation, accusation vote, rematch request) — always
+   * `{phaseId, ...extra}`, `playerId` is never included (the gateway injects it from the
+   * authenticated socket, same as `submitMinigameAction`). Returns false without sending if there
+   * is no live connection/view or another action is already pending — callers should treat a
+   * `false` return as "the click was a no-op," not throw.
+   */
+  sendPlayerEvent: (type: string, extra?: Record<string, JsonValue>) => boolean;
   retry: () => void;
 }
 
@@ -30,14 +44,23 @@ export function usePlayerRealtime(session: PlayerSessionRecord | null): UsePlaye
   const [connectionError, setConnectionError] = useState<DisplayError | null>(null);
   const [view, setView] = useState<PlayerView | null>(null);
   const [privateInfo, setPrivateInfo] = useState<PrivatePlayerPayload | null>(null);
+  const [actionPending, setActionPending] = useState(false);
+  const [actionError, setActionError] = useState<DisplayError | null>(null);
 
   const socketRef = useRef<RealtimeSocket | null>(null);
+  const viewRef = useRef<PlayerView | null>(null);
+  const connectionRef = useRef<ConnectionState>('idle');
+  const seqRef = useRef(0);
+  useEffect(() => { viewRef.current = view; }, [view]);
+  useEffect(() => { connectionRef.current = connectionState; }, [connectionState]);
 
   useEffect(() => {
     // Session changed (or became unavailable) — never carry a stale player's private payload
     // forward. Clearing it here is synchronizing with that external fact, not deriving UI state.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- see comment above
     setPrivateInfo(null);
+    setActionPending(false);
+    setActionError(null);
 
     if (!session) {
       setConnectionState('idle');
@@ -67,12 +90,22 @@ export function usePlayerRealtime(session: PlayerSessionRecord | null): UsePlaye
       onEnvelope: (type, payload) => {
         if (type === 'view:player') {
           const parsed = PlayerViewPayloadSchema.safeParse(payload);
-          if (parsed.success) setView(parsed.data as PlayerView);
+          if (parsed.success) {
+            setView(parsed.data as PlayerView);
+            setActionPending(false);
+          }
           return;
         }
         if (type === 'player:privateRoleInfo') {
           const parsed = PrivatePlayerPayloadSchema.safeParse(payload);
           if (parsed.success) setPrivateInfo(parsed.data as PrivatePlayerPayload);
+          return;
+        }
+        if (type === 'error:actionRejected') {
+          const parsed = payload as { code?: unknown };
+          const code = typeof parsed.code === 'string' ? parsed.code : 'ACTION_REJECTED';
+          setActionPending(false);
+          setActionError({ code, message: arabicMessageForRejectionCode(code) });
         }
       },
     });
@@ -92,5 +125,34 @@ export function usePlayerRealtime(session: PlayerSessionRecord | null): UsePlaye
     socketRef.current?.retry();
   }, []);
 
-  return { connectionState, view, privateInfo, connectionError, retry };
+  const submitMinigameAction = useCallback((actionType: string, data: JsonValue): boolean => {
+    const socket = socketRef.current;
+    const currentView = viewRef.current;
+    if (!socket || !currentView || connectionRef.current !== 'connected' || actionPending) return false;
+    const actionId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID() : `action-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    seqRef.current = Math.max(seqRef.current + 1, Date.now());
+    setActionError(null);
+    setActionPending(true);
+    socket.send('player:submitAction', {
+      phaseId: currentView.phase.phaseId,
+      seq: seqRef.current,
+      actionId,
+      actionType,
+      data,
+    });
+    return true;
+  }, [actionPending]);
+
+  const sendPlayerEvent = useCallback((type: string, extra: Record<string, JsonValue> = {}): boolean => {
+    const socket = socketRef.current;
+    const currentView = viewRef.current;
+    if (!socket || !currentView || connectionRef.current !== 'connected' || actionPending) return false;
+    setActionError(null);
+    setActionPending(true);
+    socket.send(type, { phaseId: currentView.phase.phaseId, ...extra });
+    return true;
+  }, [actionPending]);
+
+  return { connectionState, view, privateInfo, connectionError, actionPending, actionError, submitMinigameAction, sendPlayerEvent, retry };
 }

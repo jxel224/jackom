@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createTestDeps } from './helpers/test-deps.js';
-import { ackAllReveals, expireTimer, setupRoom, startGame } from './helpers/room.js';
+import { castAccusationVotes, driveToAdminSelection, hackerIdsOf, pushButton, setupRoom, startGame, submitAccusation } from './helpers/room.js';
 import { createRoom, joinPlayer } from '../src/fsm/room-lifecycle.js';
 import { handleEvent } from '../src/fsm/transitions.js';
 import { createDefaultConfig } from '../src/config/defaults.js';
@@ -74,41 +74,24 @@ describe('Rematch', () => {
     const roomId = setup.room.roomId;
     const roomCode = setup.room.roomCode;
 
-    // Drive to FINAL_RESULTS by forcing a crew win: eliminate every hacker one at a time.
-    let { room, priv } = startGame(setup.room, setup.priv, deps);
-    ({ room, priv } = ackAllReveals(room, priv, setup.playerIds, deps));
-    ({ room, priv } = expireTimer(room, priv, deps)); // GAME_INTRO -> ... -> HACKER_CORRUPTION
-    ({ room, priv } = expireTimer(room, priv, deps)); // HACKER_CORRUPTION -> MINIGAME_INSTRUCTIONS
-    ({ room, priv } = expireTimer(room, priv, deps)); // -> MINIGAME_PLAY
-    ({ room, priv } = expireTimer(room, priv, deps)); // -> RESULTS_REVEAL
-    ({ room, priv } = expireTimer(room, priv, deps)); // -> DISCUSSION
-    ({ room, priv } = expireTimer(room, priv, deps)); // -> FINAL_DISCUSSION (roundsPerCycle default 2, but special game may trigger; drive generically)
+    // Drive to FINAL_RESULTS the only way a real match can end early: a resolved Push-the-Button
+    // accusation (the legacy periodic elimination vote was retired — see PART 1 of the final
+    // gameplay closure). Push the button from MINIGAME_SELECT, correctly nominate the real Hacker
+    // set, and have everyone approve.
+    const atSelect = driveToAdminSelection(setup, deps);
+    let room = atSelect.room;
+    let priv = atSelect.priv;
+    const hackerIds = hackerIdsOf(priv);
+    const initiatorId = setup.playerIds.find((id) => !hackerIds.includes(id)) ?? setup.playerIds[0]!;
 
-    // Regardless of the exact path, keep expiring timers / advancing until we hit FINAL_RESULTS or run out of budget.
-    for (let i = 0; i < 40 && room.phase.state !== 'FINAL_RESULTS'; i++) {
-      if (room.phase.state === 'VOTING') {
-        // Vote out a hacker if any remain, else skip.
-        const hackerId = Object.values(priv.players).find((p) => p.role === 'HACKER' && room.players[p.playerId]?.alive)?.playerId;
-        const target = hackerId ?? 'skip';
-        for (const voterId of setup.playerIds) {
-          if (!room.players[voterId]?.alive) continue;
-          const res = handleEvent(
-            room,
-            priv,
-            { type: 'player:submitVote', phaseId: room.phase.phaseId, playerId: voterId, targetPlayerId: target },
-            { kind: 'player', playerId: voterId },
-            deps,
-          );
-          room = res.room;
-          priv = res.priv;
-        }
-      }
-      const res = expireTimer(room, priv, deps);
-      room = res.room;
-      priv = res.priv;
-    }
+    ({ room, priv } = pushButton(room, priv, initiatorId, deps));
+    expect(room.phase.state).toBe('ACCUSATION_SELECT');
+    ({ room, priv } = submitAccusation(room, priv, initiatorId, hackerIds, deps));
+    expect(room.phase.state).toBe('ACCUSATION_VOTE');
+    ({ room, priv } = castAccusationVotes(room, priv, setup.playerIds, 'APPROVE', deps));
 
     expect(room.phase.state).toBe('FINAL_RESULTS');
+    expect(room.winner).toBe('crew');
 
     // FINAL_RESULTS -> REMATCH_LOBBY -> LOBBY via host:restartMatch (a direct shortcut, ARCHITECTURE.md §6/§9.1).
     const restarted = handleEvent(room, priv, { type: 'host:restartMatch' }, { kind: 'host' }, deps);
@@ -120,10 +103,42 @@ describe('Rematch', () => {
     expect(Object.keys(restarted.room.players).sort()).toEqual(setup.playerIds.sort());
     expect(restarted.room.winner).toBeNull();
     expect(restarted.room.roundHistory).toHaveLength(0);
-    expect(restarted.room.voteHistory).toHaveLength(0);
+    expect(restarted.room.accusationHistory).toHaveLength(0);
     for (const playerId of setup.playerIds) {
       expect(restarted.priv.players[playerId]?.role).toBeNull();
       expect(restarted.room.players[playerId]?.alive).toBe(true);
+    }
+  });
+
+  it('24. the real player-facing rematch button (host:advance then a single host:startGame) starts a genuine new match in one click — not the host:restartMatch shortcut', () => {
+    const deps = createTestDeps();
+    const setup = setupRoom(5, deps);
+    const atSelect = driveToAdminSelection(setup, deps);
+    let room = atSelect.room;
+    let priv = atSelect.priv;
+    const hackerIds = hackerIdsOf(priv);
+    const initiatorId = setup.playerIds.find((id) => !hackerIds.includes(id)) ?? setup.playerIds[0]!;
+
+    ({ room, priv } = pushButton(room, priv, initiatorId, deps));
+    ({ room, priv } = submitAccusation(room, priv, initiatorId, hackerIds, deps));
+    ({ room, priv } = castAccusationVotes(room, priv, setup.playerIds, 'APPROVE', deps));
+    expect(room.phase.state).toBe('FINAL_RESULTS');
+
+    // TvFinalResults' one real button: host:advance -> REMATCH_LOBBY (same as production TV code).
+    const advanced = handleEvent(room, priv, { type: 'host:advance', phaseId: room.phase.phaseId }, { kind: 'host' }, deps);
+    expect(advanced.room.phase.state).toBe('REMATCH_LOBBY');
+
+    // TvLobby's rematch button sends the exact same event LOBBY's own start button sends:
+    // host:startGame. A single click must reach ROLE_REVEAL directly — it must NOT dead-end back at
+    // a relabelled LOBBY requiring a second, identical-looking click (the real bug PART 5's
+    // real-browser Playwright validation caught: the previous handleRematchLobby only reset to
+    // LOBBY on this event, silently requiring a second host:startGame to actually begin play).
+    const started = handleEvent(advanced.room, advanced.priv, { type: 'host:startGame', phaseId: advanced.room.phase.phaseId }, { kind: 'host' }, deps);
+    expect(started.room.phase.state).toBe('ROLE_REVEAL');
+    expect(started.room.cycle).toBe(1);
+    expect(started.room.winner).toBeNull();
+    for (const playerId of setup.playerIds) {
+      expect(started.priv.players[playerId]?.role).toMatch(/^(CREW|HACKER)$/);
     }
   });
 });

@@ -89,10 +89,10 @@ describe('PhaseTimerService', () => {
     const gameIntroScheduled = harness.scheduler.getScheduled(setup.roomId)!;
     expect(harness.manager.get(setup.roomId).getSnapshot()!.room.phase.state).toBe('GAME_INTRO');
 
-    await hostDispatch(harness, setup.roomId, 'host:skipIntro'); // GAME_INTRO -> MINIGAME_SELECT -> HACKER_CORRUPTION (auto-advance)
+    await hostDispatch(harness, setup.roomId, 'host:skipIntro'); // GAME_INTRO -> MINIGAME_SELECT (the Admin's real, timed selection window)
 
     const room = harness.manager.get(setup.roomId).getSnapshot()!.room;
-    expect(room.phase.state).toBe('HACKER_CORRUPTION');
+    expect(room.phase.state).toBe('MINIGAME_SELECT');
     const afterSkipScheduled = harness.scheduler.getScheduled(setup.roomId);
     expect(afterSkipScheduled).not.toBeNull();
     expect(afterSkipScheduled!.phaseId).not.toBe(gameIntroScheduled.phaseId);
@@ -383,7 +383,7 @@ describe('PhaseTimerService', () => {
     expect(entries.some((e) => e.event === 'timer_broadcast_failed')).toBe(true);
   });
 
-  it('21. a simultaneous final vote and a voting-timer expiry are processed sequentially, never double-applied', async () => {
+  it('21. a simultaneous final accusation vote and an accusation-timer expiry are processed sequentially, never double-applied', async () => {
     const deps = createTestDeps(439);
     const repos = buildRepos(deps);
     const harness = buildTimerHarness(deps, repos);
@@ -393,48 +393,61 @@ describe('PhaseTimerService', () => {
     });
     await startGameViaActor(harness, setup.roomId);
     await ackAllRevealsViaActor(harness, setup.roomId, setup.playerIds);
-    await driveViaTimersUntil(harness, setup.roomId, (s) => s === 'VOTING');
+    await driveViaTimersUntil(harness, setup.roomId, (s) => s === 'MINIGAME_SELECT');
 
     const room = harness.manager.get(setup.roomId).getSnapshot()!.room;
-    expect(room.phase.state).toBe('VOTING');
-    const votingPhaseId = room.phase.phaseId;
+    const [initiatorId, suspectId, ...otherVoters] = setup.playerIds;
+    await playerDispatch(harness, setup.roomId, initiatorId!, 'player:pushButton');
+    const afterSelect = harness.manager.get(setup.roomId).getSnapshot()!.room;
+    expect(afterSelect.phase.state).toBe('ACCUSATION_SELECT');
+    await playerDispatch(harness, setup.roomId, initiatorId!, 'player:submitAccusation', { suspectIds: [suspectId] });
+
+    const atVote = harness.manager.get(setup.roomId).getSnapshot()!.room;
+    expect(atVote.phase.state).toBe('ACCUSATION_VOTE');
+    const votePhaseId = atVote.phase.phaseId;
 
     // Every voter but the last casts a normal vote first.
-    const [lastVoter, ...earlierVoters] = setup.playerIds;
+    const [lastVoter, ...earlierVoters] = otherVoters;
     for (const voterId of earlierVoters) {
-      const result = await playerDispatch(harness, setup.roomId, voterId, 'player:submitVote', { targetPlayerId: 'skip' });
+      const result = await playerDispatch(harness, setup.roomId, voterId, 'player:submitAccusationVote', { vote: 'REJECT' });
       expect(result.rejected).toBeUndefined();
     }
+    await playerDispatch(harness, setup.roomId, initiatorId!, 'player:submitAccusationVote', { vote: 'REJECT' });
 
-    // The final vote (which alone would complete VOTING) and the phase's own timer expiry race.
+    // The final vote (which alone would complete ACCUSATION_VOTE) and the phase's own timer expiry race.
     const [voteOutcome] = await Promise.all([
-      playerDispatch(harness, setup.roomId, lastVoter!, 'player:submitVote', { targetPlayerId: 'skip' }),
-      harness.fireExpiry(setup.roomId, votingPhaseId),
+      playerDispatch(harness, setup.roomId, lastVoter!, 'player:submitAccusationVote', { vote: 'REJECT' }),
+      harness.fireExpiry(setup.roomId, votePhaseId),
     ]);
 
     const finalRoom = harness.manager.get(setup.roomId).getSnapshot()!.room;
-    expect(finalRoom.phase.state).toBe('ELIMINATION_RESULT'); // exactly one exit from VOTING happened
-    expect(finalRoom.voteHistory).toHaveLength(1); // never double-recorded
+    expect(finalRoom.phase.state).not.toBe('ACCUSATION_VOTE'); // exactly one exit from ACCUSATION_VOTE happened
+    expect(finalRoom.accusationHistory).toHaveLength(1); // never double-recorded
     // Whichever of the two events won, the other one is provably harmless: it either got rejected
     // outright (STALE_PHASE) or, if it landed first, the other simply became a stale no-op timer —
-    // either way there is only one VoteRecord and only one terminal phase.
+    // either way there is only one AccusationRecord and only one terminal phase.
     void voteOutcome;
+    void room;
   });
 
-  it('22. MatchClock is never read or written by phase-timer scheduling/expiry', async () => {
+  it('22. MatchClock is driven entirely by the FSM, never directly read/written by phase-timer scheduling/expiry itself', async () => {
     const deps = createTestDeps(441);
     const harness = buildTimerHarness(deps, buildRepos(deps));
     const setup = await setupRoomViaActor(harness, 5);
     await startGameViaActor(harness, setup.roomId); // ROLE_REVEAL
     const matchClockAtStart = harness.manager.get(setup.roomId).getSnapshot()!.room.matchClock;
-    expect(matchClockAtStart.mode).toBe('disabled');
+    expect(matchClockAtStart.status).toBe('pending'); // investigation gameplay hasn't started yet
 
-    // Drive several purely timer-scheduled transitions — none of ROLE_REVEAL/GAME_INTRO/
-    // MINIGAME_SELECT touch matchClock at all (only SPECIAL_GAME_RESULT does, per the FSM — not the
-    // timer subsystem — and is exercised separately in special-game.test.ts).
+    // Drive several purely timer-scheduled transitions. PhaseTimerService itself never imports or
+    // references matchClock at all (MatchClockService, a fully separate scheduler, owns that
+    // concern — see CORE_LOGIC_PHASE1_REPORT.md §5) — but the ROOM's matchClock legitimately
+    // starts running as a side effect of the FSM's own handleGameIntro logic once GAME_INTRO exits,
+    // proving the phase-timer subsystem correctly drives the FSM forward without needing any
+    // special-case knowledge of the match clock to do so.
     await driveViaTimersUntil(harness, setup.roomId, (s) => s === 'HACKER_CORRUPTION');
 
     const matchClockLater = harness.manager.get(setup.roomId).getSnapshot()!.room.matchClock;
-    expect(matchClockLater).toEqual(matchClockAtStart); // byte-identical — untouched by the timer subsystem
+    expect(matchClockLater.status).toBe('running');
+    expect(matchClockLater.deadlineAt).not.toBeNull();
   });
 });

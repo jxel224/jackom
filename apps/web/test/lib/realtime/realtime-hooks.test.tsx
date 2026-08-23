@@ -42,19 +42,26 @@ import type { HostSessionRecord, PlayerSessionRecord } from '../../../lib/sessio
 const hostSession: HostSessionRecord = { roomCode: 'ABCD12', hostSessionToken: 'host-tok' };
 const playerSession: PlayerSessionRecord = { roomCode: 'ABCD12', playerId: 'p1', playerSessionToken: 'player-tok', displayName: 'سارة' };
 
+const fixtureMatchClock = { status: 'pending', clockId: '', startedAt: null, deadlineAt: null, remainingMs: 0, totalPenaltyMs: 0 };
+
 const tvView = {
   roomCode: 'ABCD12',
   phase: { state: 'LOBBY', phaseId: 'phase-1', phaseStartedAt: 0, durationMs: null },
   players: [],
   cycle: 0,
   roundInCycle: 0,
+  adminId: null,
   firewallActive: false,
-  matchClock: null,
+  matchClock: fixtureMatchClock,
   currentMinigame: null,
   currentSpecialGame: null,
   votingProgress: null,
+  hackerCount: 0,
+  accusation: null,
+  accusationCooldownUntil: null,
   lastRoundResult: null,
   winner: null,
+  finalReveal: null,
 };
 
 const playerView = {
@@ -62,11 +69,22 @@ const playerView = {
   self: { playerId: 'p1', name: 'سارة', avatarId: 'a1', alive: true, connectionStatus: 'connected' },
   others: [],
   phase: { state: 'LOBBY', phaseId: 'phase-1', phaseStartedAt: 0, durationMs: null },
+  adminId: null,
   isParticipantThisRound: false,
+  isAdmin: false,
+  adminSelection: null,
+  hackerInfo: null,
+  matchClock: fixtureMatchClock,
   minigameView: null,
   canVote: false,
   canAct: false,
+  hackerCount: 0,
+  canPushButton: false,
+  accusation: null,
+  accusationCooldownUntil: null,
   lastRoundResult: null,
+  winner: null,
+  finalReveal: null,
 };
 
 const privatePayload = { playerId: 'p1', role: 'CREW', fellowHackerIds: [] };
@@ -118,9 +136,12 @@ describe('useHostRealtime', () => {
     act(() => instance.options.onEnvelope('view:tv', tvView));
     act(() => result.current.startGame());
 
-    act(() => instance.options.onEnvelope('error:actionRejected', { code: 'NOT_ENOUGH_PLAYERS', message: 'عدد اللاعبين غير كافٍ.' }));
+    // The server's own `message` is intentionally ignored — every rejection code maps through the
+    // client's own centralized Arabic copy (`rejection-messages.ts`), the same way `usePlayerRealtime`
+    // already behaves, so wording stays consistent regardless of what the server happens to send.
+    act(() => instance.options.onEnvelope('error:actionRejected', { code: 'INVALID_PLAYER_COUNT', message: 'ignored server text' }));
     expect(result.current.startPending).toBe(false);
-    expect(result.current.startError).toEqual({ code: 'NOT_ENOUGH_PLAYERS', message: 'عدد اللاعبين غير كافٍ.' });
+    expect(result.current.startError).toEqual({ code: 'INVALID_PLAYER_COUNT', message: 'عدد اللاعبين غير مناسب لبدء الجولة.' });
   });
 
   it('closes the socket on unmount', () => {
@@ -187,6 +208,20 @@ describe('usePlayerRealtime', () => {
 
     unmount();
     expect(instance.close).toHaveBeenCalledOnce();
+  });
+
+  it('sends a generic minigame intent with current phase, monotonic seq, and generated action id', () => {
+    const { result } = renderHook(() => usePlayerRealtime(playerSession));
+    const instance = MockRealtimeSocket.instances[0]!;
+    act(() => instance.options.onStateChange('connected', null));
+    act(() => instance.options.onEnvelope('view:player', { ...playerView, phase: { ...playerView.phase, state: 'MINIGAME_PLAY' } }));
+    act(() => expect(result.current.submitMinigameAction('SUBMIT_RANKING', { order: ['card_1', 'card_2', 'card_3', 'card_4'] })).toBe(true));
+    expect(instance.send).toHaveBeenCalledWith('player:submitAction', expect.objectContaining({
+      phaseId: 'phase-1', actionType: 'SUBMIT_RANKING', data: { order: ['card_1', 'card_2', 'card_3', 'card_4'] }, seq: expect.any(Number), actionId: expect.any(String),
+    }));
+    expect(result.current.actionPending).toBe(true);
+    const payload = instance.send.mock.calls[0]![1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('playerId');
   });
 
   it('session === null never opens a connection', () => {

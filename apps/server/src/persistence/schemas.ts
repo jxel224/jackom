@@ -29,12 +29,11 @@ const GameStateSchema = z.enum([
   'MINIGAME_PLAY',
   'RESULTS_REVEAL',
   'DISCUSSION',
+  'ACCUSATION_SELECT',
+  'ACCUSATION_VOTE',
   'SPECIAL_GAME_INTRO',
   'SPECIAL_GAME_PLAY',
   'SPECIAL_GAME_RESULT',
-  'FINAL_DISCUSSION',
-  'VOTING',
-  'ELIMINATION_RESULT',
   'FINAL_RESULTS',
   'REMATCH_LOBBY',
   'ABANDONED',
@@ -43,10 +42,10 @@ const GameStateSchema = z.enum([
 const RoleSchema = z.enum(['CREW', 'HACKER']);
 const ConnectionStatusSchema = z.enum(['connected', 'disconnected', 'afk']);
 const WinnerSchema = z.union([z.enum(['crew', 'hackers']), z.null()]);
-const TieBreakRuleSchema = z.enum(['no_elimination', 'random', 'revote']);
 const CorruptionRevealPolicySchema = z.enum(['on_results', 'on_instructions', 'never']);
 const SpecialGameInsertionPointSchema = z.enum(['between_rounds', 'end_of_cycle', 'fixed_point']);
-const MatchClockModeSchema = z.enum(['disabled', 'countdown']);
+const MatchClockStatusSchema = z.enum(['pending', 'running', 'paused', 'stopped']);
+const AccusationVoteChoiceSchema = z.enum(['APPROVE', 'REJECT']);
 
 // ---- Config -------------------------------------------------------------------------------------
 
@@ -69,10 +68,6 @@ const MinigameSelectionConfigSchema = z.object({
   minigameSelectionRuleId: z.string(),
 });
 
-const CorruptionConfigSchema = z.object({
-  aggregationRuleId: z.string(),
-});
-
 const EliminatedPlayerPolicySchema = z.object({
   canPlayMinigames: z.boolean(),
   canBeSelectedForSpecialGame: z.boolean(),
@@ -84,13 +79,13 @@ const EliminatedPlayerPolicySchema = z.object({
 const TimerConfigSchema = z.object({
   roleRevealDurationMs: z.number(),
   introDurationMs: z.number(),
+  adminSelectionTimeoutMs: z.number(),
+  accusationSelectionTimeoutMs: z.number(),
+  accusationVotingTimeoutMs: z.number(),
   corruptionWindowMs: z.number(),
   instructionsDurationMs: z.number(),
   resultsDurationMs: z.number(),
   discussionDurationMs: z.number(),
-  finalDiscussionDurationMs: z.number(),
-  votingDurationMs: z.number(),
-  eliminationRevealDurationMs: z.number(),
   specialIntroDurationMs: z.number(),
   specialResultDurationMs: z.number(),
 });
@@ -99,19 +94,19 @@ const MatchRulesConfigSchema = z.object({
   minPlayers: z.number(),
   maxPlayers: z.number(),
   roundsPerCycle: z.number(),
-  maxCycles: z.number(),
-  tieBreakRule: TieBreakRuleSchema,
   corruptionRevealPolicy: CorruptionRevealPolicySchema,
   reconnectGraceMs: z.number(),
   hostGraceMs: z.number(),
   afkThresholdMs: z.number(),
+  matchClockTotalMs: z.number(),
+  adminMaySelectSelf: z.boolean(),
+  accusationCooldownMs: z.number(),
 });
 
 const RoomConfigSchema = z.object({
   roleBalance: RoleBalanceConfigSchema,
   specialGame: SpecialGameSchedulerConfigSchema,
   minigameSelection: MinigameSelectionConfigSchema,
-  corruption: CorruptionConfigSchema,
   eliminatedPlayerPolicy: EliminatedPlayerPolicySchema,
   timers: TimerConfigSchema,
   rules: MatchRulesConfigSchema,
@@ -133,6 +128,7 @@ const HostSessionSchema = z.object({
   connectionStatus: ConnectionStatusSchema,
   connectedAt: z.number(),
   lastSeenAt: z.number(),
+  hostUserId: z.string().nullable(),
 });
 
 const PlayerPrivateSchema = z.object({
@@ -152,11 +148,12 @@ const PhaseInfoSchema = z.object({
 });
 
 const MatchClockSchema = z.object({
-  mode: MatchClockModeSchema,
+  status: MatchClockStatusSchema,
+  clockId: z.string(),
   startedAt: z.union([z.number(), z.null()]),
-  durationMs: z.union([z.number(), z.null()]),
-  penaltyMs: z.number(),
-  pausedAt: z.union([z.number(), z.null()]),
+  deadlineAt: z.union([z.number(), z.null()]),
+  remainingMs: z.number(),
+  totalPenaltyMs: z.number(),
 });
 
 const MatchLogEntrySchema = z.object({
@@ -172,9 +169,12 @@ const CurrentRoundStateSchema = z.object({
   roundInCycle: z.number(),
   minigameId: z.string(),
   minigameVersion: z.string(),
+  adminId: z.string(),
+  adminSelectedParticipantIds: z.array(z.string()),
   participantIds: z.array(z.string()),
-  corrupted: z.boolean(),
-  corruptionRevealed: z.boolean(),
+  hackedPlayerIds: z.array(z.string()),
+  hackerActionsUsed: z.record(z.string(), z.boolean()),
+  hackedPlayerIdsRevealed: z.boolean(),
   moduleState: JsonValueSchema,
   lastSeq: z.record(z.string(), z.number()),
   recentActionIds: z.record(z.string(), z.array(z.string())),
@@ -190,11 +190,14 @@ const CurrentSpecialRoundStateSchema = z.object({
   startedAt: z.number(),
 });
 
-const CurrentVoteStateSchema = z.object({
-  cycle: z.number(),
-  votes: z.record(z.string(), z.string()),
+const CurrentAccusationStateSchema = z.object({
+  initiatorId: z.string(),
+  requiredSuspectCount: z.number(),
+  suspectIds: z.union([z.array(z.string()), z.null()]),
+  eligibleVoterIds: z.array(z.string()),
+  votes: z.record(z.string(), AccusationVoteChoiceSchema),
+  originState: z.enum(['DISCUSSION', 'MINIGAME_SELECT']),
   startedAt: z.number(),
-  revoteOf: z.union([z.array(z.string()), z.null()]),
 });
 
 // ---- Completed history ------------------------------------------------------------------------
@@ -204,8 +207,9 @@ const RoundRecordSchema = z.object({
   roundInCycle: z.number(),
   minigameId: z.string(),
   minigameVersion: z.string(),
-  corrupted: z.boolean(),
-  corruptionRevealed: z.boolean(),
+  adminId: z.string(),
+  hackedPlayerIds: z.array(z.string()),
+  hackedPlayerIdsRevealed: z.boolean(),
   success: z.boolean(),
   scoreDeltas: z.record(z.string(), z.number()),
   resultSummary: JsonValueSchema,
@@ -223,11 +227,14 @@ const SpecialRoundRecordSchema = z.object({
   endedAt: z.number(),
 });
 
-const VoteRecordSchema = z.object({
-  cycle: z.number(),
-  votes: z.record(z.string(), z.string()),
-  eliminatedPlayerId: z.union([z.string(), z.null()]),
-  tie: z.boolean(),
+const AccusationRecordSchema = z.object({
+  initiatorId: z.string(),
+  suspectIds: z.array(z.string()),
+  votes: z.record(z.string(), AccusationVoteChoiceSchema),
+  approved: z.boolean(),
+  correct: z.union([z.boolean(), z.null()]),
+  startedAt: z.number(),
+  endedAt: z.number(),
 });
 
 // ---- Root documents -----------------------------------------------------------------------------
@@ -244,14 +251,18 @@ export const RoomStateSchema = z.object({
   firewallActive: z.boolean(),
   specialGameUsed: z.boolean(),
   winner: WinnerSchema,
+  adminId: z.union([z.string(), z.null()]),
+  adminQueue: z.array(z.string()),
   matchClock: MatchClockSchema,
+  hackerCount: z.number(),
   currentRound: z.union([CurrentRoundStateSchema, z.null()]),
   currentSpecialRound: z.union([CurrentSpecialRoundStateSchema, z.null()]),
-  currentVote: z.union([CurrentVoteStateSchema, z.null()]),
+  currentAccusation: z.union([CurrentAccusationStateSchema, z.null()]),
+  accusationCooldownUntil: z.union([z.number(), z.null()]),
   currentPhaseSubmissions: z.record(z.string(), z.boolean()),
   roundHistory: z.array(RoundRecordSchema),
   specialRoundHistory: z.array(SpecialRoundRecordSchema),
-  voteHistory: z.array(VoteRecordSchema),
+  accusationHistory: z.array(AccusationRecordSchema),
   matchLog: z.array(MatchLogEntrySchema),
   stateVersion: z.number(),
   createdAt: z.number(),
@@ -261,5 +272,5 @@ export const RoomStateSchema = z.object({
 export const RoomPrivateStateSchema = z.object({
   roomId: z.string(),
   players: z.record(z.string(), PlayerPrivateSchema),
-  currentCorruptionChoices: z.record(z.string(), z.boolean()),
+  hacksRemaining: z.record(z.string(), z.number()),
 });

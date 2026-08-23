@@ -30,6 +30,7 @@ function baseResult(overrides: Partial<UseHostRealtimeResult> = {}): UseHostReal
     startGame: vi.fn(),
     startPending: false,
     startError: null,
+    sendHostEvent: vi.fn(() => true),
     retry: vi.fn(),
     ...overrides,
   };
@@ -48,7 +49,7 @@ const tvView = {
   cycle: 0,
   roundInCycle: 0,
   firewallActive: false,
-  matchClock: null,
+  matchClock: { status: 'pending', clockId: 'c1', startedAt: null, deadlineAt: null, remainingMs: 900_000, totalPenaltyMs: 0 },
   currentMinigame: null,
   currentSpecialGame: null,
   votingProgress: null,
@@ -111,13 +112,17 @@ describe('TvLobby', () => {
     expect(screen.getByText('عدد اللاعبين غير كافٍ.')).toBeTruthy();
   });
 
-  it('renders the shared post-lobby placeholder once the phase leaves LOBBY, and does not render the roster/start button', () => {
+  it('routes into the TV gameplay foundation once the phase leaves LOBBY, without roster controls', () => {
     useHostRealtime.mockReturnValue(baseResult({ view: { ...tvView, phase: { ...tvView.phase, state: 'ROLE_ASSIGNMENT' } } }));
     render(<TvLobby session={session} minPlayers={2} maxPlayers={12} />);
 
-    expect(screen.getByText('بدأت اللعبة')).toBeTruthy();
+    // Headquarters V1 (B+ visual implementation) shows the phase label once, in a single small
+    // badge, instead of the old duplicated eyebrow+body label — see HEADQUARTERS_VISUAL_
+    // IMPLEMENTATION_REPORT.md §3.
+    expect(screen.getAllByText('توزيع الأدوار')).toHaveLength(1);
+    expect(screen.getByText('الهاكرز')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'ابدأ اللعبة' })).toBeNull();
-    expect(screen.queryByText('سارة')).toBeNull();
+    expect(screen.getByText('سارة')).toBeTruthy();
   });
 
   it('an unauthorized connection clears the stored host session and offers a way back home', () => {

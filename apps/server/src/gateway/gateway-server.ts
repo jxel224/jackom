@@ -6,6 +6,7 @@ import type { RoomActorManager } from '../actors/room-actor-manager.js';
 import type { RoomLookupRepository } from '../persistence/room-lookup-repo.js';
 import type { SessionRepository } from '../persistence/session-repo.js';
 import type { PhaseTimerService } from '../timers/phase-timer-service.js';
+import type { MatchClockService } from '../timers/match-clock-service.js';
 import { RoomConsistencyError } from '../persistence/errors.js';
 import { noopRoomLogger, type RoomLogger } from '../persistence/logging.js';
 import { DEFAULT_ROOM_TTL_SECONDS } from '../persistence/config.js';
@@ -48,6 +49,8 @@ export interface GatewayDeps {
    * `WebSocket` — it only ever calls back with a `roomId`.
    */
   timerService?: PhaseTimerService;
+  /** Same callback-boundary pattern as `timerService` — see MatchClockService for why it's a separate service. */
+  matchClockService?: MatchClockService;
 }
 
 export interface GatewayOptions {
@@ -120,6 +123,7 @@ export class GatewayServer {
     // accepted and persisted — broadcastRoom() below is the exact same path every client-originated
     // mutation already uses.
     this.deps.timerService?.setOnRoomMutated((roomId) => this.broadcastRoom(roomId));
+    this.deps.matchClockService?.setOnRoomMutated((roomId) => this.broadcastRoom(roomId));
   }
 
   /** Starts listening on `port` (0 = ephemeral) and returns the actually-bound port. */
@@ -149,6 +153,7 @@ export class GatewayServer {
       this.heartbeatTimer = null;
     }
     this.deps.timerService?.shutdown();
+    this.deps.matchClockService?.shutdown();
     for (const ws of this.sockets.keys()) {
       try {
         ws.close(1001, 'Server shutting down');
@@ -177,7 +182,12 @@ export class GatewayServer {
       callback(false, 400, 'Invalid connection path');
       return;
     }
-    const kind = match[1] as ConnectionKind;
+    // The URL segment is literally "host" or "play" (the wire path convention, `/play/{roomCode}`);
+    // `ConnectionKind` names the "play" side `'player'` everywhere else in this file (`meta.kind ===
+    // 'player'` gates FSM event-identity injection in `dispatchFsmEvent`) — normalize here rather
+    // than force-casting the raw URL segment, which previously let the literal string `'play'` masquerade
+    // as `'player'` and silently fail every such comparison.
+    const kind: ConnectionKind = match[1] === 'host' ? 'host' : 'player';
     const roomCode = decodeURIComponent(match[2]!);
 
     this.deps.roomLookupRepo
@@ -545,7 +555,7 @@ export class GatewayServer {
     const hostWs = this.registry.getHost(roomId);
     if (hostWs) {
       try {
-        this.send(hostWs, { type: 'view:tv', requestId: null, payload: buildTvView(snapshot.room) });
+        this.send(hostWs, { type: 'view:tv', requestId: null, payload: buildTvView(snapshot.room, snapshot.priv) });
       } catch {
         this.logger({ roomId, event: 'view_build_failed', detail: { recipient: 'host' } });
       }

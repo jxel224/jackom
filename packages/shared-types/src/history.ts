@@ -1,4 +1,5 @@
 import type { JsonValue } from './json';
+import type { AccusationVoteChoice } from './enums';
 
 /** Completed, resolved records only — append-only, never mutated after push (ARCHITECTURE.md §8.5). */
 export interface RoundRecord {
@@ -6,15 +7,15 @@ export interface RoundRecord {
   roundInCycle: number;
   minigameId: string;
   minigameVersion: string;
-  corrupted: boolean;
+  adminId: string;
+  hackedPlayerIds: string[];
   /**
-   * Whether `corrupted` may be exposed by a view builder for this specific round, computed once
-   * at push time from the configured corruptionRevealPolicy and persisted here so the decision
-   * survives even after the round leaves `currentRound` (fixes a gap found during implementation
-   * where the reveal flag lived only on the ephemeral CurrentRoundState — see ARCHITECTURE.md
-   * Revision 3 note under §8.5/§13).
+   * Whether `hackedPlayerIds` may be exposed by a view builder for this specific round, computed
+   * once at push time from the configured corruptionRevealPolicy and persisted here so the
+   * decision survives even after the round leaves `currentRound` (see ARCHITECTURE.md Revision 3
+   * note under §8.5/§13 — the same gap that motivated this field originally).
    */
-  corruptionRevealed: boolean;
+  hackedPlayerIdsRevealed: boolean;
   success: boolean;
   scoreDeltas: Record<string, number>;
   /** Module-defined, safe to persist/display — NOT the raw internal moduleState. */
@@ -33,9 +34,14 @@ export interface SpecialRoundRecord {
   endedAt: number;
 }
 
-export interface VoteRecord {
-  cycle: number;
-  votes: Record<string, string>;
-  eliminatedPlayerId: string | null;
-  tie: boolean;
+/** A completed final accusation, resolved either way — see `CurrentAccusationState`. */
+export interface AccusationRecord {
+  initiatorId: string;
+  suspectIds: string[];
+  votes: Record<string, AccusationVoteChoice>;
+  approved: boolean;
+  /** Only meaningful when `approved` — was the accused set exactly the real Hacker set. Null if never approved. */
+  correct: boolean | null;
+  startedAt: number;
+  endedAt: number;
 }

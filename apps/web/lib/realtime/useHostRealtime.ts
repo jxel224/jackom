@@ -5,17 +5,21 @@ import { env } from '../env';
 import type { HostSessionRecord } from '../session-storage';
 import { RealtimeSocket } from './realtime-socket';
 import { TvViewPayloadSchema } from './wire-schemas';
+import { arabicMessageForRejectionCode } from './rejection-messages';
 import type { ConnectionState } from './types';
 import type { DisplayError, TvView } from './public-types';
+import type { JsonValue } from '../shared';
 
 export interface UseHostRealtimeResult {
   connectionState: ConnectionState;
   view: TvView | null;
   connectionError: DisplayError | null;
-  /** Sends `host:startGame` for the CURRENT phaseId. No-op if not connected or no view yet. */
+  /** Sends `host:startGame` for the CURRENT phaseId — works from LOBBY or REMATCH_LOBBY alike, the server routes on phase. No-op if not connected or no view yet. */
   startGame: () => void;
   startPending: boolean;
   startError: DisplayError | null;
+  /** Sends any other real, phaseId-scoped `host:*` event (e.g. `host:advance` to leave FINAL_RESULTS for REMATCH_LOBBY). Shares `startPending`/`startError`. */
+  sendHostEvent: (type: string, extra?: Record<string, JsonValue>) => boolean;
   retry: () => void;
 }
 
@@ -81,10 +85,9 @@ export function useHostRealtime(session: HostSessionRecord | null): UseHostRealt
           return;
         }
         if (type === 'error:actionRejected') {
-          const parsed = payload as { code?: unknown; message?: unknown };
-          if (typeof parsed.code === 'string' && typeof parsed.message === 'string') {
-            setStartError({ code: parsed.code, message: parsed.message });
-          }
+          const parsed = payload as { code?: unknown };
+          const code = typeof parsed.code === 'string' ? parsed.code : 'ACTION_REJECTED';
+          setStartError({ code, message: arabicMessageForRejectionCode(code) });
           setStartPending(false);
         }
       },
@@ -109,9 +112,19 @@ export function useHostRealtime(session: HostSessionRecord | null): UseHostRealt
     socket.send('host:startGame', { phaseId: currentView.phase.phaseId });
   }, []);
 
+  const sendHostEvent = useCallback((type: string, extra: Record<string, JsonValue> = {}): boolean => {
+    const socket = socketRef.current;
+    const currentView = viewRef.current;
+    if (!socket || !currentView) return false;
+    setStartError(null);
+    setStartPending(true);
+    socket.send(type, { phaseId: currentView.phase.phaseId, ...extra });
+    return true;
+  }, []);
+
   const retry = useCallback(() => {
     socketRef.current?.retry();
   }, []);
 
-  return { connectionState, view, connectionError, startGame, startPending, startError, retry };
+  return { connectionState, view, connectionError, startGame, startPending, startError, sendHostEvent, retry };
 }

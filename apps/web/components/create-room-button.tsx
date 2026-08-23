@@ -1,13 +1,6 @@
-'use client';
-
-import { useState, type ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
-import { Button } from './ui/Button';
-import { ErrorMessage } from './ui/ErrorMessage';
-import type { ButtonSize } from './ui/button-styles';
-import { createRoom, ApiClientError } from '../lib/api/client';
-import { arabicMessageForErrorCode } from '../lib/api/error-messages';
-import { saveHostSession } from '../lib/session-storage';
+import Link from 'next/link';
+import type { ReactNode } from 'react';
+import { buttonClassName, type ButtonSize } from './ui/button-styles';
 
 export interface CreateRoomButtonProps {
   children: ReactNode;
@@ -18,36 +11,19 @@ export interface CreateRoomButtonProps {
 }
 
 /**
- * Owns the entire "إنشاء غرفة" flow: calls the real create-room API, stores the host session
- * (`lib/session-storage.ts`), and navigates to `/tv`. Reused both as the hero's primary CTA and
- * (compact) as the nav's always-available create action — every instance hits the real API.
+ * The marketing-wide "أنشئ غرفة" entry point (hero CTA + nav shortcut) — a plain navigation link to
+ * `/games`, the one real, ownership-aware Create Room surface (Permanent Business Backend). This
+ * used to call the create-room API directly and land on `/tv` immediately; now that hosting
+ * requires an authenticated, owning User, instantly creating a room from an anonymous marketing
+ * page no longer makes sense as a product flow — `/games` is where the real, server-authorized
+ * action lives (see apps/web/app/games/page.tsx), matching the intended
+ * "Login → /games → HACKERS → Create Room" path exactly. The security boundary was never here
+ * anyway — it's enforced server-side regardless of which UI surface a request comes from.
  */
 export function CreateRoomButton({ children, className, size = 'lg', fullWidth = true }: CreateRoomButtonProps) {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleClick = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await createRoom();
-      saveHostSession({ roomCode: result.roomCode, hostSessionToken: result.hostSessionToken });
-      router.push('/tv');
-    } catch (err) {
-      const code = err instanceof ApiClientError ? err.code : 'INTERNAL_ERROR';
-      const message = err instanceof ApiClientError ? err.message : undefined;
-      setError(arabicMessageForErrorCode(code, message));
-      setLoading(false);
-    }
-  };
-
   return (
-    <div className="flex w-full flex-col gap-2">
-      <Button type="button" onClick={() => void handleClick()} loading={loading} size={size} fullWidth={fullWidth} className={className}>
-        {children}
-      </Button>
-      {error ? <ErrorMessage message={error} /> : null}
-    </div>
+    <Link href="/games" className={[buttonClassName({ size, fullWidth }), className].filter(Boolean).join(' ')}>
+      {children}
+    </Link>
   );
 }

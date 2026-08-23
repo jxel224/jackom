@@ -8,7 +8,11 @@ import { isValidDisplayName, isValidRoomCodeFormat, normalizeDisplayNameInput, n
  * — one rule, checked on both sides, never two competing definitions.
  */
 
-export const CreateRoomRequestSchema = z.object({}).strict();
+export const CreateRoomRequestSchema = z
+  .object({
+    gameSlug: z.string().min(1).max(64),
+  })
+  .strict();
 
 export const JoinRoomRequestSchema = z
   .object({
@@ -27,3 +31,33 @@ export const RoomCodeParamSchema = z
   .string()
   .transform(normalizeRoomCodeInput)
   .refine(isValidRoomCodeFormat, { message: 'invalid room code format' });
+
+// ---- Permanent Business Backend: auth request bodies -------------------------------------------
+// Coarse shape/bounds only, same discipline as above — the real business rules (email normalization,
+// password strength, duplicate-email/credential checks) live in db/services/auth-service.ts, the
+// one place that actually knows about the database.
+
+const EmailSchema = z.string().min(3).max(254).email();
+/** A floor, not a full policy — real strength scoring is a separate, later concern this phase doesn't own. */
+const PasswordSchema = z.string().min(8).max(200);
+const DisplayNameSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .transform(normalizeDisplayNameInput)
+  .refine(isValidDisplayName, { message: 'invalid display name' });
+
+export const RegisterRequestSchema = z
+  .object({
+    email: EmailSchema,
+    password: PasswordSchema,
+    displayName: DisplayNameSchema,
+  })
+  .strict();
+
+export const LoginRequestSchema = z
+  .object({
+    email: EmailSchema,
+    password: z.string().min(1).max(200),
+  })
+  .strict();

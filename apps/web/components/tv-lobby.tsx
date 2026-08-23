@@ -13,7 +13,7 @@ import { SectionTitle } from './ui/SectionTitle';
 import { StatusBadge } from './ui/StatusBadge';
 import { buttonClassName } from './ui/button-styles';
 import { ConnectionPulse, GlitchFrame } from './graphics';
-import { PostLobbyPlaceholder } from './post-lobby-placeholder';
+import { TvGameplayRoot } from './gameplay/hacker/GameplayRoots';
 import { useHostRealtime } from '../lib/realtime/useHostRealtime';
 import { describeConnectionState, pulseToneFor } from '../lib/realtime/connection-status';
 import { clearHostSession, type HostSessionRecord } from '../lib/session-storage';
@@ -27,7 +27,7 @@ export interface TvLobbyProps {
 
 /** The real, live host lobby (Development Step 7B) — everything past "we have a host session" lives here. */
 export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
-  const { connectionState, view, connectionError, startGame, startPending, startError, retry } = useHostRealtime(session);
+  const { connectionState, view, connectionError, startGame, startPending, startError, sendHostEvent, retry } = useHostRealtime(session);
 
   useEffect(() => {
     // The stored session is no longer valid — never let a stale token linger for the next visit.
@@ -48,20 +48,16 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
   const status = describeConnectionState(connectionState);
   const joinUrl = env.NEXT_PUBLIC_WEB_BASE_URL ? `${env.NEXT_PUBLIC_WEB_BASE_URL.replace(/\/+$/, '')}/join/${session.roomCode}` : null;
 
-  if (view && view.phase.state !== 'LOBBY') {
-    return (
-      <TvScreenLayout eyebrow="جاكوم">
-        <StatusBadge tone={status.tone} live>
-          <ConnectionPulse tone={pulseToneFor(status.tone)} animated={connectionState === 'connected'} />
-          {status.label}
-        </StatusBadge>
-        <PostLobbyPlaceholder />
-      </TvScreenLayout>
-    );
+  // REMATCH_LOBBY behaves exactly like LOBBY from the host's side — same roster, same
+  // `host:startGame` event, same min/max check — so it reuses this same waiting-room view rather
+  // than routing into TvGameplayRoot's generic phase panel.
+  if (view && view.phase.state !== 'LOBBY' && view.phase.state !== 'REMATCH_LOBBY') {
+    return <TvGameplayRoot view={view} connectionState={connectionState} startPending={startPending} startError={startError} sendHostEvent={sendHostEvent} retry={retry} />;
   }
 
   const players = view?.players ?? [];
   const canStart = view !== null && players.length >= minPlayers && players.length <= maxPlayers;
+  const isRematch = view?.phase.state === 'REMATCH_LOBBY';
 
   return (
     <TvScreenLayout eyebrow="جاكوم">
@@ -71,7 +67,7 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
       </StatusBadge>
 
       <SectionTitle as="h1" scale="tv" className="items-center">
-        انضموا إلى الغرفة
+        {isRematch ? 'جاهزون لجولة جديدة؟' : 'انضموا إلى الغرفة'}
       </SectionTitle>
 
       <GlitchFrame accent="brand" className="p-4 sm:p-6">
@@ -114,7 +110,7 @@ export function TvLobby({ session, minPlayers, maxPlayers }: TvLobbyProps) {
 
       <div className="flex flex-col items-center gap-2">
         <Button size="tv" onClick={startGame} loading={startPending} disabled={!canStart || startPending}>
-          ابدأ اللعبة
+          {isRematch ? 'ابدأ جولة جديدة' : 'ابدأ اللعبة'}
         </Button>
         {view && !canStart ? <p className="text-sm text-ink-subtle">بحاجة إلى {minPlayers} لاعبين على الأقل لبدء اللعبة.</p> : null}
         {startError ? <ErrorMessage message={startError.message} /> : null}

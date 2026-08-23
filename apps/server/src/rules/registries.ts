@@ -29,6 +29,10 @@ export const specialGameScheduleRegistry: Record<string, (room: RoomState, deps:
 
 export const specialGameParticipantRegistry: Record<string, (room: RoomState, deps: Deps) => number> = {
   'placeholder-fixed-four': () => 4,
+  'bomb-protocol-scaling': (room) => {
+    const count = Object.keys(room.players).length;
+    return count <= 5 ? 3 : count <= 7 ? 4 : 5;
+  },
 };
 
 /**
@@ -38,11 +42,17 @@ export const specialGameParticipantRegistry: Record<string, (room: RoomState, de
  * modules. Only one concrete id (the generic placeholder) exists today; the rule body is otherwise
  * a real, generically-correct "pick one of N" implementation.
  */
+/**
+ * Only used as the Admin-selection TIMEOUT fallback now (GAMEPLAY_RULES_V1.md §5) — the Admin
+ * chooses explicitly in the normal path. Kept as a registry (not inlined) so the fallback rule
+ * itself stays swappable independent of the timeout-handling code that invokes it.
+ */
 export const minigameSelectionRegistry: Record<string, (room: RoomState, deps: Deps, availableIds: string[]) => string> = {
   'placeholder-random': (_room, deps, availableIds) => randomChoice(availableIds, deps.rng),
-};
-
-export const corruptionAggregationRegistry: Record<string, (choices: Record<string, boolean>) => boolean> = {
-  // "Any one hacker corrupts" — one of several plausible rules (majority/unanimous being others).
-  'placeholder-any-corrupts': (choices) => Object.values(choices).some(Boolean),
+  'rank-it-only': () => 'RANK_IT',
+  'complete-it-only': () => 'COMPLETE_IT',
+  'predict-them-only': () => 'PREDICT_THEM',
+  'draw-it-only': () => 'DRAW_IT',
+  'describe-it-only': () => 'DESCRIBE_IT',
+  'defend-it-only': () => 'DEFEND_IT',
 };

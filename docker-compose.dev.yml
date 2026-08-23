@@ -1,13 +1,18 @@
-# Development-only Redis for Jackom (Development Step 7C). This is NOT required — any locally
-# installed Redis reachable at REDIS_URL works too (see LOCAL_DEVELOPMENT.md). This file exists as
-# a convenience for founders who'd rather not install Redis natively on Windows.
+# Development-only Redis + PostgreSQL for Jackom. Neither is required — any locally installed Redis
+# reachable at REDIS_URL, or Postgres reachable at DATABASE_URL, works too (see
+# LOCAL_DEVELOPMENT.md). This file exists as a convenience for founders who'd rather not install
+# either natively on Windows.
 #
-# Start:  npm run dev:redis        (docker compose -f docker-compose.dev.yml up -d)
-# Stop:   npm run dev:redis:stop   (docker compose -f docker-compose.dev.yml down)
+# Start both:  npm run dev:services        (docker compose -f docker-compose.dev.yml up -d)
+# Stop both:   npm run dev:services:stop   (docker compose -f docker-compose.dev.yml down)
+# Redis only:  npm run dev:redis / dev:redis:stop
+# Postgres only: npm run dev:db / dev:db:stop
 #
-# Security: bound to 127.0.0.1 only — never reachable from outside this machine. No password/secret
-# is set or committed (matches this repo's existing local-only threat model for Step 3's Redis
-# usage); do not reuse this compose file for anything beyond a local developer machine.
+# Security: both bound to 127.0.0.1 only — never reachable from outside this machine. No real
+# secret is set or committed — Postgres's dev credentials below are placeholder local-only values,
+# identical in spirit to Redis's existing no-auth local-only setup; do not reuse this compose file
+# for anything beyond a local developer machine, and never point DATABASE_URL/REDIS_URL at these
+# values outside local dev.
 services:
   redis:
     image: redis:7-alpine
@@ -19,5 +24,26 @@ services:
     command: ['redis-server', '--save', '60', '1']
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: jackom-dev-postgres
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jackom}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jackom_dev_only}
+      POSTGRES_DB: ${POSTGRES_DB:-jackom_dev}
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-jackom_test}
+    volumes:
+      - jackom-dev-postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-jackom} -d ${POSTGRES_DB:-jackom_dev}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   jackom-dev-redis-data:
+  jackom-dev-postgres-data:

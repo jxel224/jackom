@@ -23,12 +23,14 @@ afterEach(() => {
 });
 
 describe('Core route shells render without crashing', () => {
-  it('/ (landing) — "أنشئ غرفة" is a real interactive button, not a plain link', () => {
+  it('/ (landing) — "أنشئ غرفة" links to /games, the real ownership-aware Create Room surface (Permanent Business Backend)', () => {
     render(<HomePage />);
     expect(screen.getByRole('heading', { level: 1, name: 'اللعب يبدأ من الشاشة… والفوضى تبدأ من جوالاتكم.' })).toBeTruthy();
-    // The nav also carries its own always-available "أنشئ غرفة" CTA, so more than one real button
+    // The nav also carries its own always-available "أنشئ غرفة" CTA, so more than one real link
     // shares this accessible name on this page — assert at least one exists rather than exactly one.
-    expect(screen.getAllByRole('button', { name: 'أنشئ غرفة' }).length).toBeGreaterThan(0);
+    const createRoomLinks = screen.getAllByRole('link', { name: 'أنشئ غرفة' });
+    expect(createRoomLinks.length).toBeGreaterThan(0);
+    for (const link of createRoomLinks) expect(link.getAttribute('href')).toBe('/games');
     expect(screen.getAllByRole('link', { name: 'انضم إلى غرفة' }).length).toBeGreaterThan(0);
   });
 

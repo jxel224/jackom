@@ -42,8 +42,18 @@ export const FSM_EVENT_PAYLOAD_SCHEMAS: Record<string, z.ZodTypeAny> = {
   'host:closeRoom': empty,
   'player:acknowledgeReveal': phaseIdOnly,
   'player:requestRematch': phaseIdOnly,
-  'player:submitCorruptionChoice': z.object({ phaseId: z.string().min(1), corrupt: z.boolean() }),
-  'player:submitVote': z.object({ phaseId: z.string().min(1), targetPlayerId: z.string().min(1).max(64) }),
+  'player:adminSelectMinigame': z.object({
+    phaseId: z.string().min(1),
+    minigameId: z.string().min(1).max(64),
+    participantIds: z.array(z.string().min(1).max(64)).min(1).max(20),
+  }),
+  'player:submitHack': z.object({ phaseId: z.string().min(1), targetPlayerId: z.string().min(1).max(64) }),
+  'player:pushButton': phaseIdOnly,
+  'player:submitAccusation': z.object({
+    phaseId: z.string().min(1),
+    suspectIds: z.array(z.string().min(1).max(64)).min(1).max(20),
+  }),
+  'player:submitAccusationVote': z.object({ phaseId: z.string().min(1), vote: z.enum(['APPROVE', 'REJECT']) }),
   'player:submitAction': z.object({
     phaseId: z.string().min(1),
     seq: z.number().int().nonnegative(),
@@ -68,6 +78,7 @@ export const PlayerLeavePayloadSchema = z.object({});
  */
 export const SYSTEM_ONLY_EVENT_TYPES = new Set([
   'timer:expired',
+  'matchClock:expired',
   'player:disconnected',
   'player:reconnected',
   'host:graceExpired',

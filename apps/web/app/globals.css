@@ -75,6 +75,52 @@
   --shadow-hard: 4px 4px 0 0 var(--color-ink);
   --shadow-hard-brand: 4px 4px 0 0 var(--color-brand);
   --shadow-hard-sm: 2px 2px 0 0 var(--color-ink);
+
+  /*
+   * Headquarters (Hacker game, in-match TV scene) tokens — JACKOM Visual & UX Bible V1.1,
+   * Direction B+ "Warm Retro Tech Operations Office" (HEADQUARTERS_HERO_PRODUCTION_SPEC_V1).
+   * Deliberately namespaced `hq-*` and NOT used outside apps/web/components/gameplay/hacker/headquarters/
+   * — this is the Hacker game's own in-match identity, separate from the site-wide brand tokens
+   * above (lime/purple/cyan), same way one game's art style differs from a console's dashboard.
+   * Do not reuse these tokens on marketing/lobby/auth screens; do not change the tokens above to
+   * match these.
+   */
+  --color-hq-wall: #3a2c19; /* warm plaster, dark-first so the TV stays legible in a dim room */
+  --color-hq-wall-dim: #2c2112;
+  --color-hq-floor: #241a0e;
+  --color-hq-wood: #8c6a3e; /* desk surfaces */
+  --color-hq-wood-line: #6e4f28;
+  --color-hq-bronze: #b98f55; /* Central Unit / Console / Doorway / Spine casing */
+  --color-hq-bronze-line: #6e4f28;
+  --color-hq-bronze-dark: #4a3419;
+  --color-hq-metal: #2a2018; /* dark internals behind bronze casing */
+  --color-hq-teal-dark: #16343b;
+  --color-hq-teal: #1f4b4e;
+  --color-hq-teal-active: #2e6e71;
+  --color-hq-teal-highlight: #57b7b4;
+  --color-hq-gold: #e3b85c; /* Admin only */
+  --color-hq-ember: #e2755e; /* Emergency only */
+  --color-hq-plum: #b084ac; /* Hacker-private only — never used on this TV scene, kept for completeness */
+  --color-hq-ink: #f2e6cc; /* primary text on the dark HQ scene */
+  --color-hq-ink-muted: #c9b896;
+  --color-hq-ink-subtle: #8f8265;
+
+  --spacing-hq-xs: 0.25rem;
+  --spacing-hq-s: 0.5rem;
+  --spacing-hq-m: 0.75rem;
+  --spacing-hq-l: 1rem;
+  --spacing-hq-xl: 1.5rem;
+
+  /* Two geometries only, per the Bible's anti-"twenty border radii" rule: notched for anything
+   * "built into the room" (Central Unit, Console, Doorway), a small fixed radius for nameplates. */
+  --radius-hq-nameplate: 0.375rem;
+  --shadow-hq-s: 2px 2px 0 0 rgba(0, 0, 0, 0.35);
+  --shadow-hq-m: 3px 3px 0 0 rgba(0, 0, 0, 0.35);
+  --shadow-hq-l: 4px 4px 0 0 rgba(0, 0, 0, 0.4);
+
+  --font-hq-display: var(--font-cairo), ui-sans-serif, system-ui, sans-serif;
+  --font-hq-body: var(--font-almarai), var(--font-cairo), ui-sans-serif, system-ui, sans-serif;
+  --font-hq-mono: var(--font-vt323), var(--font-jetbrains-mono), ui-monospace, monospace;
 }
 
 @layer base {
@@ -118,6 +164,15 @@
 }
 
 @layer utilities {
+  .rate-slider {
+    accent-color: var(--color-brand);
+  }
+
+  .rate-slider::-webkit-slider-thumb {
+    min-width: var(--spacing-control);
+    min-height: var(--spacing-control);
+  }
+
   /* Decorative background textures used by the graphics motif library (components/graphics/) —
    * plain CSS gradients/data-URIs, never image assets, so they cost nothing to ship. All are
    * intended to sit behind content via a lower-stacked `aria-hidden` layer, never as text background. */

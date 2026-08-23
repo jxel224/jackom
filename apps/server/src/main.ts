@@ -1,8 +1,23 @@
-import 'dotenv/config';
+import { config as loadDotenv } from 'dotenv';
 import { createDefaultDeps } from './fsm/default-deps.js';
 import { loadServerEnvConfig, redactRedisUrl } from './env.js';
-import { connectToRedis, buildProductionRepos, createJackomRuntime, RedisUnavailableError, PortInUseError, type JackomRuntime } from './bootstrap.js';
+import {
+  connectToRedis,
+  connectToDatabase,
+  buildProductionRepos,
+  buildBusinessServices,
+  createJackomRuntime,
+  RedisUnavailableError,
+  DatabaseUnavailableError,
+  PortInUseError,
+  type JackomRuntime,
+} from './bootstrap.js';
 import type { Redis } from 'ioredis';
+import type { PrismaClient } from './db/client.js';
+
+// `npm run dev:server` is launched from the repository root, so dotenv's default `.env` lookup
+// would miss this package's local development configuration.
+loadDotenv({ path: new URL('../.env', import.meta.url) });
 
 /**
  * Development Step 7C's local development entry point. Run via `npm run dev:server` (or the
@@ -32,14 +47,12 @@ async function main(): Promise<void> {
     throw err;
   }
 
-  const fsmDeps = createDefaultDeps();
-  const repos = buildProductionRepos(redisClient);
-
-  let runtime: JackomRuntime;
+  console.log('Connecting to PostgreSQL…');
+  let prisma: PrismaClient;
   try {
-    runtime = await createJackomRuntime({ repos, fsmDeps, env });
+    prisma = await connectToDatabase(env.databaseUrl);
   } catch (err) {
-    if (err instanceof PortInUseError) {
+    if (err instanceof DatabaseUnavailableError) {
       console.error(`\n✖ ${err.message}\n`);
       await redisClient.quit().catch(() => {});
       process.exit(1);
@@ -47,21 +60,39 @@ async function main(): Promise<void> {
     throw err;
   }
 
+  const fsmDeps = createDefaultDeps();
+  const repos = buildProductionRepos(redisClient);
+  const { authService, ownershipService } = buildBusinessServices(prisma, env.sessionTokenSecret, env.sessionTtlSeconds);
+
+  let runtime: JackomRuntime;
+  try {
+    runtime = await createJackomRuntime({ repos, fsmDeps, env, authService, ownershipService });
+  } catch (err) {
+    if (err instanceof PortInUseError) {
+      console.error(`\n✖ ${err.message}\n`);
+      await redisClient.quit().catch(() => {});
+      await prisma.$disconnect().catch(() => {});
+      process.exit(1);
+    }
+    throw err;
+  }
+
   printReadyBanner(env, runtime);
-  registerShutdownHandlers(runtime, redisClient);
+  registerShutdownHandlers(runtime, redisClient, prisma);
 }
 
 function printReadyBanner(env: ReturnType<typeof loadServerEnvConfig>, runtime: JackomRuntime): void {
-  // Deliberately sparse: no session tokens, no room contents, no Redis data, no player payloads —
-  // just where things are listening.
+  // Deliberately sparse: no session tokens, no room contents, no Redis data, no player payloads,
+  // no database credentials — just where things are listening.
   console.log('\nJackom local development is ready\n');
   console.log(`Frontend:   ${env.frontendUrl}`);
   console.log(`HTTP API:   http://localhost:${runtime.httpApiPort}`);
   console.log(`WebSocket:  ws://localhost:${runtime.wsGatewayPort}`);
-  console.log(`Redis:      connected\n`);
+  console.log(`Redis:      connected`);
+  console.log(`PostgreSQL: connected\n`);
 }
 
-function registerShutdownHandlers(runtime: JackomRuntime, redisClient: Redis): void {
+function registerShutdownHandlers(runtime: JackomRuntime, redisClient: Redis, prisma: PrismaClient): void {
   let shuttingDown = false;
 
   const shutdown = (signal: string): void => {
@@ -77,6 +108,7 @@ function registerShutdownHandlers(runtime: JackomRuntime, redisClient: Redis): v
       try {
         await runtime.close();
         await redisClient.quit();
+        await prisma.$disconnect();
       } catch {
         // already shutting down — nothing more useful to do with a close-time error here
       } finally {

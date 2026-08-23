@@ -1,4 +1,5 @@
 import type { JsonValue } from './json';
+import type { AccusationVoteChoice } from './enums';
 
 /**
  * Events accepted by the FSM (ARCHITECTURE.md §6, §9). In production these are constructed by the
@@ -51,11 +52,21 @@ export interface PlayerAcknowledgeRevealEvent {
   playerId: string;
 }
 
-export interface PlayerSubmitCorruptionChoiceEvent {
-  type: 'player:submitCorruptionChoice';
+/** Submitted only by the current Admin, during MINIGAME_SELECT — GAMEPLAY_RULES_V1.md §4/§5. */
+export interface PlayerAdminSelectMinigameEvent {
+  type: 'player:adminSelectMinigame';
   phaseId: string;
   playerId: string;
-  corrupt: boolean;
+  minigameId: string;
+  participantIds: string[];
+}
+
+/** Submitted only by a Hacker, during the hack window — GAMEPLAY_RULES_V1.md §7. Replaces the old round-wide `player:submitCorruptionChoice`. */
+export interface PlayerSubmitHackEvent {
+  type: 'player:submitHack';
+  phaseId: string;
+  playerId: string;
+  targetPlayerId: string;
 }
 
 export interface PlayerSubmitActionEvent {
@@ -68,12 +79,30 @@ export interface PlayerSubmitActionEvent {
   data: JsonValue;
 }
 
-export interface PlayerSubmitVoteEvent {
-  type: 'player:submitVote';
+/**
+ * Any eligible player may push the button, from an allowed investigation state (GAMEPLAY_RULES_V1.md
+ * accusation system section) — Crew and Hackers alike. The server never exposes the pusher's role.
+ */
+export interface PlayerPushButtonEvent {
+  type: 'player:pushButton';
   phaseId: string;
   playerId: string;
-  /** A playerId, or the reserved sentinel 'skip'. */
-  targetPlayerId: string;
+}
+
+/** Submitted only by the accusation's initiator, during ACCUSATION_SELECT. */
+export interface PlayerSubmitAccusationEvent {
+  type: 'player:submitAccusation';
+  phaseId: string;
+  playerId: string;
+  suspectIds: string[];
+}
+
+/** Submitted by any eligible voter, during ACCUSATION_VOTE. One vote per player, locked on submission. */
+export interface PlayerSubmitAccusationVoteEvent {
+  type: 'player:submitAccusationVote';
+  phaseId: string;
+  playerId: string;
+  vote: AccusationVoteChoice;
 }
 
 export interface PlayerRequestRematchEvent {
@@ -114,6 +143,17 @@ export interface TimerExpiredEvent {
 }
 
 /**
+ * Synthesized internally by MatchClockService when the match clock's deadline is reached
+ * (GAMEPLAY_RULES_V1.md §6) — never sent by a client. `clockId` guards against a stale/superseded
+ * expiry (e.g. the clock was paused for the special game, or already ended the match) the same way
+ * `TimerExpiredEvent.phaseId` guards phase timers.
+ */
+export interface MatchClockExpiredEvent {
+  type: 'matchClock:expired';
+  clockId: string;
+}
+
+/**
  * Represents identity already authenticated at the WebSocket connection level (ARCHITECTURE.md
  * §1.1) — the (not-yet-built) gateway constructs this from the socket's bound session, never from
  * anything inside the event payload. `handleEvent` cross-checks the event against this and rejects
@@ -129,15 +169,19 @@ export type InboundEvent =
   | HostCloseRoomEvent
   | HostDisconnectedEvent
   | PlayerAcknowledgeRevealEvent
-  | PlayerSubmitCorruptionChoiceEvent
+  | PlayerAdminSelectMinigameEvent
+  | PlayerSubmitHackEvent
+  | PlayerPushButtonEvent
+  | PlayerSubmitAccusationEvent
+  | PlayerSubmitAccusationVoteEvent
   | PlayerSubmitActionEvent
-  | PlayerSubmitVoteEvent
   | PlayerRequestRematchEvent
   | PlayerDisconnectedEvent
   | PlayerReconnectedEvent
   | HostSocketDisconnectedEvent
   | HostSocketReconnectedEvent
-  | TimerExpiredEvent;
+  | TimerExpiredEvent
+  | MatchClockExpiredEvent;
 
 export type RejectionCode =
   | 'STALE_PHASE'
@@ -152,16 +196,22 @@ export type RejectionCode =
   | 'INVALID_EVENT_FOR_STATE'
   | 'MATCH_IN_PROGRESS'
   | 'INVALID_PLAYER_COUNT'
-  | 'WRONG_INSTANCE';
+  | 'WRONG_INSTANCE'
+  | 'NOT_ADMIN'
+  | 'INVALID_MINIGAME_ID'
+  | 'INVALID_PARTICIPANTS'
+  | 'NO_HACKS_REMAINING'
+  | 'ALREADY_HACKED_THIS_ROUND'
+  | 'INVALID_TARGET'
+  | 'TARGET_ALREADY_HACKED'
+  | 'FIREWALL_ACTIVE'
+  | 'STALE_MATCH_CLOCK'
+  | 'ACCUSATION_ON_COOLDOWN'
+  | 'NOT_INITIATOR'
+  | 'INVALID_SUSPECTS';
 
 export interface ActionRejectedMessage {
   code: RejectionCode;
   message?: string;
   phaseId?: string;
-}
-
-/** Unicast to a hacker's own socket only, confirming their own corruption submission — never broadcast. */
-export interface CorruptionAckMessage {
-  received: boolean;
-  blockedByFirewall?: boolean;
 }

@@ -13,7 +13,7 @@ export function createDefaultConfig(overrides: Partial<RoomConfig> = {}): RoomCo
     },
     specialGame: {
       specialGameScheduleRuleId: 'placeholder-end-of-cycle-once',
-      specialGameParticipantRuleId: 'placeholder-fixed-four',
+      specialGameParticipantRuleId: 'bomb-protocol-scaling',
       insertionPoint: 'end_of_cycle',
       minParticipants: 3,
       maxParticipants: 5,
@@ -21,9 +21,6 @@ export function createDefaultConfig(overrides: Partial<RoomConfig> = {}): RoomCo
     },
     minigameSelection: {
       minigameSelectionRuleId: 'placeholder-random',
-    },
-    corruption: {
-      aggregationRuleId: 'placeholder-any-corrupts',
     },
     eliminatedPlayerPolicy: {
       canPlayMinigames: false,
@@ -35,26 +32,27 @@ export function createDefaultConfig(overrides: Partial<RoomConfig> = {}): RoomCo
     timers: {
       roleRevealDurationMs: 15_000,
       introDurationMs: 10_000,
+      adminSelectionTimeoutMs: 20_000,
+      accusationSelectionTimeoutMs: 20_000,
+      accusationVotingTimeoutMs: 20_000,
       corruptionWindowMs: 10_000,
       instructionsDurationMs: 10_000,
       resultsDurationMs: 8_000,
       discussionDurationMs: 60_000,
-      finalDiscussionDurationMs: 60_000,
-      votingDurationMs: 30_000,
-      eliminationRevealDurationMs: 8_000,
       specialIntroDurationMs: 8_000,
       specialResultDurationMs: 8_000,
     },
     rules: {
-      minPlayers: 5,
-      maxPlayers: 12,
+      minPlayers: 4,
+      maxPlayers: 10,
       roundsPerCycle: 2,
-      maxCycles: 10,
-      tieBreakRule: 'no_elimination',
       corruptionRevealPolicy: 'on_results',
       reconnectGraceMs: 30_000,
       hostGraceMs: 60_000,
       afkThresholdMs: 45_000,
+      matchClockTotalMs: 900_000,
+      adminMaySelectSelf: true,
+      accusationCooldownMs: 20_000,
     },
   };
 
@@ -64,7 +62,6 @@ export function createDefaultConfig(overrides: Partial<RoomConfig> = {}): RoomCo
     roleBalance: { ...base.roleBalance, ...overrides.roleBalance },
     specialGame: { ...base.specialGame, ...overrides.specialGame },
     minigameSelection: { ...base.minigameSelection, ...overrides.minigameSelection },
-    corruption: { ...base.corruption, ...overrides.corruption },
     eliminatedPlayerPolicy: { ...base.eliminatedPlayerPolicy, ...overrides.eliminatedPlayerPolicy },
     timers: { ...base.timers, ...overrides.timers },
     rules: { ...base.rules, ...overrides.rules },

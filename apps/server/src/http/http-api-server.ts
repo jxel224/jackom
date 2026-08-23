@@ -3,8 +3,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
   ApiErrorCode,
   ApiErrorPayload,
+  AuthResponseBody,
   CreateRoomResponseBody,
   JoinRoomResponseBody,
+  MeResponseBody,
+  OwnedGamesResponseBody,
   RoomAvailabilityResponseBody,
 } from '../shared.js';
 import type { Deps } from '../types/deps.js';
@@ -22,7 +25,11 @@ import { buildPlayerView } from '../views/build-player-view.js';
 import { RateLimiter } from '../gateway/rate-limiter.js';
 import { ApiError, ApiErrors } from './errors.js';
 import { IdempotencyCache } from './idempotency-cache.js';
-import { CreateRoomRequestSchema, JoinRoomRequestSchema, RoomCodeParamSchema } from './schemas.js';
+import { CreateRoomRequestSchema, JoinRoomRequestSchema, LoginRequestSchema, RegisterRequestSchema, RoomCodeParamSchema } from './schemas.js';
+import { parseCookies, serializeExpiredSessionCookie, serializeSessionCookie, SESSION_COOKIE_NAME } from './cookies.js';
+import type { AuthService } from '../db/services/auth-service.js';
+import { toSafeUser } from '../db/services/auth-service.js';
+import type { OwnershipService } from '../db/services/ownership-service.js';
 
 /**
  * Development Step 7A's HTTP boundary — a small, dependency-free (no Express/Fastify) wrapper
@@ -43,6 +50,9 @@ export interface HttpApiDeps {
   roomLookupRepo: RoomLookupRepository;
   sessionRepo: SessionRepository;
   fsmDeps: Deps;
+  /** Permanent Business Backend (Users/Auth/Ownership) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md. Optional so every existing test/call site that only exercises room create/join keeps working unchanged; auth/games/owner-gated create-room routes reject with INTERNAL_ERROR if this is genuinely missing at runtime (never silently no-ops). */
+  authService?: AuthService;
+  ownershipService?: OwnershipService;
 }
 
 export interface HttpApiOptions {
@@ -50,9 +60,12 @@ export interface HttpApiOptions {
   maxBodyBytes?: number;
   /**
    * Exact origins allowed to call this API from a browser. Empty (the default) means every
-   * cross-origin request is rejected — there is no wildcard/`*` fallback, and credentials are never
-   * part of this scheme (sessions travel in response/request BODIES, never cookies — see
-   * IMPLEMENTATION_PROGRESS.md Step 7A for why).
+   * cross-origin request is rejected — there is no wildcard/`*` fallback. Credentials (the auth
+   * session cookie) ARE part of this scheme as of the Permanent Business Backend phase — every
+   * reflected origin gets `Access-Control-Allow-Credentials: true`, which is only safe because we
+   * never fall back to a wildcard origin (browsers refuse credentialed wildcard responses anyway).
+   * The pre-existing gameplay create/join room tokens still travel in response/request BODIES, never
+   * cookies — only the new permanent-account session uses a cookie.
    */
   allowedOrigins?: string[];
   rateLimitMaxRequests?: number;
@@ -61,6 +74,10 @@ export interface HttpApiOptions {
   /** How long a `requestId` idempotency key is remembered for. */
   idempotencyTtlMs?: number;
   logger?: RoomLogger;
+  /** `Secure` flag on the auth session cookie — must be true for any real (https) deployment. */
+  sessionCookieSecure?: boolean;
+  /** How long an auth session cookie lasts. */
+  sessionTtlSeconds?: number;
 }
 
 interface ResolvedOptions {
@@ -70,6 +87,8 @@ interface ResolvedOptions {
   rateLimitWindowMs: number;
   ttlSeconds: number;
   idempotencyTtlMs: number;
+  sessionCookieSecure: boolean;
+  sessionTtlSeconds: number;
 }
 
 const DEFAULT_OPTIONS: ResolvedOptions = {
@@ -79,6 +98,8 @@ const DEFAULT_OPTIONS: ResolvedOptions = {
   rateLimitWindowMs: 60_000,
   ttlSeconds: DEFAULT_ROOM_TTL_SECONDS,
   idempotencyTtlMs: 5 * 60_000,
+  sessionCookieSecure: false,
+  sessionTtlSeconds: 30 * 24 * 60 * 60,
 };
 
 /** Crude bound on unbounded per-IP rate-limiter growth — a basic, single-instance safeguard, not a real eviction policy. */
@@ -141,6 +162,7 @@ export class HttpApiServer {
       }
       if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Vary', 'Origin');
       }
 
@@ -178,6 +200,30 @@ export class HttpApiServer {
         }
       }
 
+      if (segments[0] === 'api' && segments[1] === 'auth') {
+        if (segments.length === 3 && segments[2] === 'register' && req.method === 'POST') {
+          await this.handleRegister(req, res);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'login' && req.method === 'POST') {
+          await this.handleLogin(req, res);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'logout' && req.method === 'POST') {
+          await this.handleLogout(req, res);
+          return;
+        }
+        if (segments.length === 3 && segments[2] === 'me' && req.method === 'GET') {
+          await this.handleMe(req, res);
+          return;
+        }
+      }
+
+      if (segments[0] === 'api' && segments[1] === 'games' && segments[2] === 'owned' && segments.length === 3 && req.method === 'GET') {
+        await this.handleGetOwnedGames(req, res);
+        return;
+      }
+
       this.sendError(res, 404, 'INVALID_REQUEST', 'المسار غير موجود.');
     } catch (err) {
       this.handleError(res, err);
@@ -186,15 +232,27 @@ export class HttpApiServer {
 
   // ---- Route handlers ------------------------------------------------------------------------
 
+  /**
+   * Permanent Business Backend: the one authorization gate for HOSTING (PART 6/7). Guest joins
+   * (`handleJoinRoom` below) are completely untouched by any of this — only room CREATION requires
+   * a User. Order matters and mirrors the spec exactly: authenticate → verify game exists → verify
+   * active → verify ownership → ONLY THEN create Redis room state. Any rejection here means no
+   * RoomActor, no persisted RoomState, nothing left behind to clean up.
+   */
   private async handleCreateRoom(req: IncomingMessage, res: ServerResponse): Promise<void> {
     this.checkRateLimit(this.clientIp(req));
     const rawBody = await this.readJsonBody(req);
-    // Accepted but intentionally unused beyond shape validation — Step 7A never lets a client
-    // choose RoomConfig; every room uses createDefaultConfig().
-    CreateRoomRequestSchema.parse(rawBody);
+    const parsedBody = CreateRoomRequestSchema.safeParse(rawBody);
+    if (!parsedBody.success) throw ApiErrors.invalidRequest();
+    const { gameSlug } = parsedBody.data;
+
+    if (!this.deps.authService || !this.deps.ownershipService) throw ApiErrors.internal();
+    const cookies = parseCookies(req.headers.cookie);
+    const user = await this.deps.authService.requireSession(cookies[SESSION_COOKIE_NAME] ?? null);
+    await this.deps.ownershipService.requireOwnedActiveGame(user.id, gameSlug);
 
     const config = createDefaultConfig();
-    const handle = await this.deps.roomActorManager.createRoom(config);
+    const handle = await this.deps.roomActorManager.createRoom(config, user.id);
     const snapshot = this.deps.roomActorManager.get(handle.roomId).getSnapshot();
     if (!snapshot) {
       // Structurally unreachable: createRoom() always registers a pre-hydrated actor. Guarded
@@ -288,6 +346,72 @@ export class HttpApiServer {
     if (cacheKey) this.idempotency.set(cacheKey, { displayName, body });
 
     this.sendJson(res, 201, body);
+  }
+
+  // ---- Permanent Business Backend: auth + ownership route handlers -------------------------
+
+  private async handleRegister(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.checkRateLimit(this.clientIp(req));
+    if (!this.deps.authService) throw ApiErrors.internal();
+    const rawBody = await this.readJsonBody(req);
+    const parsedBody = RegisterRequestSchema.safeParse(rawBody);
+    if (!parsedBody.success) throw ApiErrors.invalidRequest();
+
+    const { user, rawToken, expiresAt } = await this.deps.authService.register(
+      parsedBody.data.email,
+      parsedBody.data.password,
+      parsedBody.data.displayName,
+    );
+    this.setSessionCookie(res, rawToken);
+    const body: AuthResponseBody = { user: toSafeUser(user) };
+    this.sendJson(res, 201, body);
+    void expiresAt; // carried in the cookie's Max-Age, not the body — nothing else needs it here
+  }
+
+  private async handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.checkRateLimit(this.clientIp(req));
+    if (!this.deps.authService) throw ApiErrors.internal();
+    const rawBody = await this.readJsonBody(req);
+    const parsedBody = LoginRequestSchema.safeParse(rawBody);
+    if (!parsedBody.success) throw ApiErrors.invalidCredentials();
+
+    const { user, rawToken } = await this.deps.authService.login(parsedBody.data.email, parsedBody.data.password);
+    this.setSessionCookie(res, rawToken);
+    const body: AuthResponseBody = { user: toSafeUser(user) };
+    this.sendJson(res, 200, body);
+  }
+
+  private async handleLogout(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.deps.authService) throw ApiErrors.internal();
+    const cookies = parseCookies(req.headers.cookie);
+    const rawToken = cookies[SESSION_COOKIE_NAME];
+    if (rawToken) await this.deps.authService.logout(rawToken);
+    res.setHeader('Set-Cookie', serializeExpiredSessionCookie(this.options.sessionCookieSecure));
+    this.sendJson(res, 200, { ok: true });
+  }
+
+  private async handleMe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.deps.authService) throw ApiErrors.internal();
+    const cookies = parseCookies(req.headers.cookie);
+    const user = await this.deps.authService.requireSession(cookies[SESSION_COOKIE_NAME] ?? null);
+    const body: MeResponseBody = { user: toSafeUser(user) };
+    this.sendJson(res, 200, body);
+  }
+
+  private async handleGetOwnedGames(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!this.deps.authService || !this.deps.ownershipService) throw ApiErrors.internal();
+    const cookies = parseCookies(req.headers.cookie);
+    const user = await this.deps.authService.requireSession(cookies[SESSION_COOKIE_NAME] ?? null);
+    const games = await this.deps.ownershipService.listOwnedGames(user.id);
+    const body: OwnedGamesResponseBody = { games: games.map((g) => ({ id: g.id, slug: g.slug, name: g.name, isActive: g.isActive })) };
+    this.sendJson(res, 200, body);
+  }
+
+  private setSessionCookie(res: ServerResponse, rawToken: string): void {
+    res.setHeader(
+      'Set-Cookie',
+      serializeSessionCookie(rawToken, { secure: this.options.sessionCookieSecure, maxAgeSeconds: this.options.sessionTtlSeconds }),
+    );
   }
 
   // ---- Shared helpers ------------------------------------------------------------------------

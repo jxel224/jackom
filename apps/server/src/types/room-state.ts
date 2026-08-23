@@ -1,7 +1,8 @@
 import type {
+  AccusationRecord,
+  CurrentAccusationState,
   CurrentRoundState,
   CurrentSpecialRoundState,
-  CurrentVoteState,
   MatchClock,
   MatchLogEntry,
   PhaseInfo,
@@ -9,7 +10,6 @@ import type {
   RoomConfig,
   RoundRecord,
   SpecialRoundRecord,
-  VoteRecord,
   Winner,
 } from '../shared.js';
 import type { HostSession, PlayerPrivate } from './sessions.js';
@@ -36,21 +36,33 @@ export interface RoomState {
   specialGameUsed: boolean;
   winner: Winner;
 
+  /** Current round's Admin — GAMEPLAY_RULES_V1.md §4. Null before investigation gameplay starts. */
+  adminId: string | null;
+  /** Shuffled queue of eligible playerIds who haven't held Admin yet this rotation cycle. Reshuffled from the eligible pool whenever it empties. */
+  adminQueue: string[];
+
   matchClock: MatchClock;
+
+  /** Public count of Hackers this match — set once at role assignment. Never the identities (Core Logic Phase 2A §2). */
+  hackerCount: number;
 
   currentRound: CurrentRoundState | null;
   currentSpecialRound: CurrentSpecialRoundState | null;
-  currentVote: CurrentVoteState | null;
+  /** The Crew's active final accusation, if any — Core Logic Phase 2A. */
+  currentAccusation: CurrentAccusationState | null;
+  /** Epoch ms after which another accusation may be initiated, or null if not on cooldown. */
+  accusationCooldownUntil: number | null;
 
   /**
    * playerId -> submitted for THIS phaseId; reset on every transition(). Unifies single-submission
-   * tracking (role-reveal acks, corruption choices, votes, rematch requests) into one mechanism.
+   * tracking (role-reveal acks, votes, rematch requests) into one mechanism. Hack submissions are
+   * tracked separately via `CurrentRoundState.hackerActionsUsed`, not this map.
    */
   currentPhaseSubmissions: Record<string, boolean>;
 
   roundHistory: RoundRecord[];
   specialRoundHistory: SpecialRoundRecord[];
-  voteHistory: VoteRecord[];
+  accusationHistory: AccusationRecord[];
   matchLog: MatchLogEntry[];
 
   /** Incremented every transition(); a sanity check on rehydration, NOT a distributed-lock mechanism. */
@@ -63,6 +75,6 @@ export interface RoomState {
 export interface RoomPrivateState {
   roomId: string;
   players: Record<string, PlayerPrivate>;
-  /** hackerId -> choice, cleared every round. */
-  currentCorruptionChoices: Record<string, boolean>;
+  /** hackerId -> hacks left this match (starts at 2, GAMEPLAY_RULES_V1.md §7). 0 for Crew players. Reset only on rematch. */
+  hacksRemaining: Record<string, number>;
 }

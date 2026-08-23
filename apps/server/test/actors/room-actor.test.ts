@@ -58,7 +58,7 @@ describe('RoomActor', () => {
 
     const stateVersionBefore = created.room.stateVersion;
 
-    // Rejected: room only has 2 players, default minPlayers is 5.
+    // Rejected: room only has 2 players, default minPlayers is 4.
     const rejectedResult = await actor.dispatch({ type: 'host:startGame', phaseId: created.room.phase.phaseId }, { kind: 'host' });
     expect(rejectedResult.rejected?.code).toBe('INVALID_PLAYER_COUNT');
     expect(await repos.roomStateRepo.load(created.room.roomId)).toBeNull(); // never persisted at all yet

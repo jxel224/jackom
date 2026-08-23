@@ -4,7 +4,9 @@ import { createTestDeps } from '../helpers/test-deps.js';
 import { buildRepos } from '../helpers/persistence.js';
 import { connectClient, waitForOpen, send, nextMessage } from '../helpers/gateway.js';
 import { requestJson } from '../helpers/http.js';
-import { connectToRedis, createJackomRuntime, PortInUseError, RedisUnavailableError, type JackomRuntime } from '../../src/bootstrap.js';
+import Redis from 'ioredis';
+import { attachRedisErrorHandler, connectToRedis, createJackomRuntime, PortInUseError, RedisUnavailableError, type JackomRuntime } from '../../src/bootstrap.js';
+import { buildTestBusinessBackend, createTestHost } from '../helpers/business-backend.js';
 import type { CreateRoomResponseBody } from '../../src/shared.js';
 
 /**
@@ -27,8 +29,29 @@ afterEach(async () => {
   serversToClose = [];
 });
 
-function buildEnv(overrides: Partial<{ httpApiPort: number; wsGatewayPort: number; roomTtlSeconds: number; allowedOrigins: string[] }> = {}) {
-  return { httpApiPort: 0, wsGatewayPort: 0, roomTtlSeconds: 3600, allowedOrigins: [], ...overrides };
+function buildEnv(
+  overrides: Partial<{
+    httpApiPort: number;
+    wsGatewayPort: number;
+    roomTtlSeconds: number;
+    allowedOrigins: string[];
+    idleActorEvictionIntervalMs: number;
+    idleActorThresholdMs: number;
+    sessionCookieSecure: boolean;
+    sessionTtlSeconds: number;
+  }> = {},
+) {
+  return {
+    httpApiPort: 0,
+    wsGatewayPort: 0,
+    roomTtlSeconds: 3600,
+    allowedOrigins: [],
+    idleActorEvictionIntervalMs: 300_000,
+    idleActorThresholdMs: 1_800_000,
+    sessionCookieSecure: false,
+    sessionTtlSeconds: 2_592_000,
+    ...overrides,
+  };
 }
 
 describe('connectToRedis — unavailable Redis fails clearly', () => {
@@ -49,14 +72,52 @@ describe('connectToRedis — unavailable Redis fails clearly', () => {
   });
 });
 
+describe('attachRedisErrorHandler — production runtime Redis client has a safe error listener', () => {
+  it('a connection-level "error" event does not crash the process (no unhandled EventEmitter throw)', () => {
+    // lazyConnect + a reserved unroutable port means this client never actually connects — this
+    // test only proves the LISTENER MECHANISM itself is safe, not real Redis connectivity (this
+    // sandbox has no reachable Redis — see LOCAL_DEVELOPMENT.md). Node's EventEmitter throws an
+    // unlistened 'error' event as an uncaught exception; if attachRedisErrorHandler failed to
+    // attach a listener, `client.emit('error', ...)` below would throw synchronously and fail this test.
+    const client = new Redis('redis://127.0.0.1:1', { lazyConnect: true });
+    const events: Array<{ roomId: string; event: string; detail?: unknown }> = [];
+    attachRedisErrorHandler(client, (e) => events.push(e));
+
+    expect(() => client.emit('error', new Error('simulated connection blip'))).not.toThrow();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ roomId: 'redis', event: 'redis_connection_error' });
+    client.disconnect();
+  });
+
+  it('logs only a sanitized error-kind label, never the raw error/message', () => {
+    const client = new Redis('redis://127.0.0.1:1', { lazyConnect: true });
+    const events: Array<{ detail?: unknown }> = [];
+    attachRedisErrorHandler(client, (e) => events.push(e));
+
+    client.emit('error', new Error('super secret connection string leaked here'));
+
+    expect(JSON.stringify(events)).not.toContain('super secret');
+    expect(events[0]?.detail).toEqual({ errorKind: 'Error' });
+    client.disconnect();
+  });
+});
+
 describe('createJackomRuntime — shared RoomActorManager, single timer service, clean shutdown', () => {
   it('a room created through the runtime is immediately visible through both the HTTP API and the WebSocket gateway', async () => {
     const deps = createTestDeps(9001);
     const repos = buildRepos(deps);
-    const runtime = await createJackomRuntime({ repos, fsmDeps: deps, env: buildEnv() });
+    const business = buildTestBusinessBackend();
+    business.repos.gameRepo.seed({ slug: 'hackers', isActive: true });
+    const host = await createTestHost(business, 'hackers', 9001);
+    const runtime = await createJackomRuntime({ repos, fsmDeps: deps, env: buildEnv(), authService: business.authService, ownershipService: business.ownershipService });
     runtimesToClose.push(runtime);
 
-    const created = await requestJson<CreateRoomResponseBody>(`http://127.0.0.1:${runtime.httpApiPort}/api/rooms`, { method: 'POST', body: '{}' });
+    const created = await requestJson<CreateRoomResponseBody>(`http://127.0.0.1:${runtime.httpApiPort}/api/rooms`, {
+      method: 'POST',
+      headers: { Cookie: host.cookieHeader },
+      body: JSON.stringify({ gameSlug: 'hackers' }),
+    });
     expect(created.status).toBe(201);
 
     // Reaches the WebSocket gateway only if it shares the SAME RoomActorManager the HTTP handler
@@ -71,10 +132,17 @@ describe('createJackomRuntime — shared RoomActorManager, single timer service,
   it('the phase timer service is wired to the same manager (a freshly created LOBBY room has no scheduled timer)', async () => {
     const deps = createTestDeps(9002);
     const repos = buildRepos(deps);
-    const runtime = await createJackomRuntime({ repos, fsmDeps: deps, env: buildEnv() });
+    const business = buildTestBusinessBackend();
+    business.repos.gameRepo.seed({ slug: 'hackers', isActive: true });
+    const host = await createTestHost(business, 'hackers', 9002);
+    const runtime = await createJackomRuntime({ repos, fsmDeps: deps, env: buildEnv(), authService: business.authService, ownershipService: business.ownershipService });
     runtimesToClose.push(runtime);
 
-    const created = await requestJson<CreateRoomResponseBody>(`http://127.0.0.1:${runtime.httpApiPort}/api/rooms`, { method: 'POST', body: '{}' });
+    const created = await requestJson<CreateRoomResponseBody>(`http://127.0.0.1:${runtime.httpApiPort}/api/rooms`, {
+      method: 'POST',
+      headers: { Cookie: host.cookieHeader },
+      body: JSON.stringify({ gameSlug: 'hackers' }),
+    });
     const resolvedRoomId = await repos.roomLookupRepo.resolveRoomCode(created.body.roomCode);
     expect(resolvedRoomId).not.toBeNull();
 

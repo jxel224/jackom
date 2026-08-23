@@ -23,22 +23,19 @@ export { createRoom, joinPlayer, leavePlayer, setPlayerProfile, kickPlayer } fro
 export type { CreateRoomResult, JoinPlayerResult, RoomAndPriv } from './fsm/room-lifecycle.js';
 export { handleEvent } from './fsm/transitions.js';
 export type { HandleEventResult, Rejection } from './fsm/result.js';
-export { checkWinCondition } from './fsm/win-condition.js';
 
 export { minigameRegistry, getMinigameModule, getSpecialGameModule } from './minigames/registry.js';
 export { GenericMinigameModule } from './minigames/generic-minigame.js';
-export { GenericSpecialGameModule } from './minigames/generic-special-game.js';
+export { BombProtocolModule } from './minigames/bomb-protocol.js';
 
 export {
   roleBalanceRegistry,
   specialGameScheduleRegistry,
   specialGameParticipantRegistry,
   minigameSelectionRegistry,
-  corruptionAggregationRegistry,
 } from './rules/registries.js';
-
-export { tally } from './voting/tally.js';
-export type { TallyResult } from './voting/tally.js';
+export { MINIGAME_PARTICIPANT_LIMITS, getParticipantLimit } from './rules/participant-limits.js';
+export type { ParticipantLimit } from './rules/participant-limits.js';
 
 export { buildTvView } from './views/build-tv-view.js';
 export { buildPlayerView } from './views/build-player-view.js';
@@ -95,6 +92,8 @@ export { RealTimerScheduler } from './timers/real-timer-scheduler.js';
 export { FakeTimerScheduler } from './timers/fake-timer-scheduler.js';
 export { PhaseTimerService } from './timers/phase-timer-service.js';
 export type { PhaseTimerServiceDeps } from './timers/phase-timer-service.js';
+export { MatchClockService } from './timers/match-clock-service.js';
+export type { MatchClockServiceDeps } from './timers/match-clock-service.js';
 
 // ---- Step 7A: HTTP room create/join API -----------------------------------------------------
 

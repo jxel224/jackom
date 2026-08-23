@@ -1,40 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import { createTestDeps } from './helpers/test-deps.js';
-import { ackAllReveals, expireTimer, hackerIdsOf, sendHost, sendPlayer, setupRoom, startGame } from './helpers/room.js';
+import { ackAllReveals, expireTimer, sendHost, sendPlayer, setupRoom, startGame } from './helpers/room.js';
 
 function reachMinigamePlay(playerCount: number, deps: ReturnType<typeof createTestDeps>) {
-  const setup = setupRoom(playerCount, deps);
+  const setup = setupRoom(playerCount, deps, { minigameSelection: { minigameSelectionRuleId: 'rank-it-only' } });
   const started = startGame(setup.room, setup.priv, deps);
   const acked = ackAllReveals(started.room, started.priv, setup.playerIds, deps);
-  const atCorruption = expireTimer(acked.room, acked.priv, deps);
-  const hackerIds = hackerIdsOf(atCorruption.priv);
-
-  let room = atCorruption.room;
-  let priv = atCorruption.priv;
-  for (const hackerId of hackerIds) {
-    const res = sendPlayer(room, priv, { type: 'player:submitCorruptionChoice', phaseId: room.phase.phaseId, playerId: hackerId, corrupt: false }, hackerId, deps);
-    room = res.room;
-    priv = res.priv;
-  }
+  let { room, priv } = expireTimer(acked.room, acked.priv, deps); // GAME_INTRO -> MINIGAME_SELECT
+  ({ room, priv } = expireTimer(room, priv, deps)); // Admin selection timeout -> HACKER_CORRUPTION
+  ({ room, priv } = expireTimer(room, priv, deps)); // no hacks submitted -> MINIGAME_INSTRUCTIONS
   ({ room, priv } = expireTimer(room, priv, deps)); // MINIGAME_INSTRUCTIONS -> MINIGAME_PLAY
   return { setup, room, priv };
 }
 
 describe('Mini-game gameplay actions', () => {
-  it('12. accepts ordered actions and applies each exactly once, by seq', () => {
+  it('12. accepts a rating and locks the exact value, by seq', () => {
     const deps = createTestDeps(23);
     const { setup, room, priv } = reachMinigamePlay(6, deps);
     expect(room.phase.state).toBe('MINIGAME_PLAY');
     const actor = setup.playerIds.find((id) => room.currentRound?.participantIds.includes(id))!;
 
-    const r1 = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 1, actionId: 'a1', actionType: 'noop', data: null }, actor, deps);
+    const order = ['card_1', 'card_2', 'card_3', 'card_4'];
+    const r1 = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 1, actionId: 'a1', actionType: 'SUBMIT_RANKING', data: { order } }, actor, deps);
     expect(r1.rejected).toBeUndefined();
-    expect((r1.room.currentRound?.moduleState as { ticks: number }).ticks).toBe(1);
-
-    const r2 = sendPlayer(r1.room, r1.priv, { type: 'player:submitAction', phaseId: r1.room.phase.phaseId, playerId: actor, seq: 2, actionId: 'a2', actionType: 'noop', data: null }, actor, deps);
-    expect(r2.rejected).toBeUndefined();
-    expect((r2.room.currentRound?.moduleState as { ticks: number }).ticks).toBe(2);
-    expect(r2.room.currentRound?.lastSeq[actor]).toBe(2);
+    expect((r1.room.currentRound?.moduleState as { submissions: Record<string, { order: string[] }> }).submissions[actor]?.order).toEqual(order);
+    expect(r1.room.currentRound?.lastSeq[actor]).toBe(1);
   });
 
   it('13. a retried action (same seq + same actionId) is not processed twice', () => {
@@ -42,11 +32,13 @@ describe('Mini-game gameplay actions', () => {
     const { setup, room, priv } = reachMinigamePlay(6, deps);
     const actor = setup.playerIds.find((id) => room.currentRound?.participantIds.includes(id))!;
 
-    const first = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 1, actionId: 'dup-1', actionType: 'noop', data: null }, actor, deps);
-    const retry = sendPlayer(first.room, first.priv, { type: 'player:submitAction', phaseId: first.room.phase.phaseId, playerId: actor, seq: 1, actionId: 'dup-1', actionType: 'noop', data: null }, actor, deps);
+    const firstOrder = ['card_1', 'card_2', 'card_3', 'card_4'];
+    const retryOrder = ['card_4', 'card_3', 'card_2', 'card_1'];
+    const first = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 1, actionId: 'dup-1', actionType: 'SUBMIT_RANKING', data: { order: firstOrder } }, actor, deps);
+    const retry = sendPlayer(first.room, first.priv, { type: 'player:submitAction', phaseId: first.room.phase.phaseId, playerId: actor, seq: 1, actionId: 'dup-1', actionType: 'SUBMIT_RANKING', data: { order: retryOrder } }, actor, deps);
 
     expect(retry.rejected).toBeUndefined(); // treated as a harmless retry, not an error
-    expect((retry.room.currentRound?.moduleState as { ticks: number }).ticks).toBe(1); // NOT incremented again
+    expect((retry.room.currentRound?.moduleState as { submissions: Record<string, { order: string[] }> }).submissions[actor]?.order).toEqual(firstOrder);
   });
 
   it('14. an out-of-order action (lower seq, new actionId) is rejected and does not mutate state', () => {
@@ -54,13 +46,15 @@ describe('Mini-game gameplay actions', () => {
     const { setup, room, priv } = reachMinigamePlay(6, deps);
     const actor = setup.playerIds.find((id) => room.currentRound?.participantIds.includes(id))!;
 
-    const ahead = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 5, actionId: 'a5', actionType: 'noop', data: null }, actor, deps);
-    expect((ahead.room.currentRound?.moduleState as { ticks: number }).ticks).toBe(1);
+    const aheadOrder = ['card_4', 'card_3', 'card_2', 'card_1'];
+    const staleOrder = ['card_1', 'card_2', 'card_3', 'card_4'];
+    const ahead = sendPlayer(room, priv, { type: 'player:submitAction', phaseId: room.phase.phaseId, playerId: actor, seq: 5, actionId: 'a5', actionType: 'SUBMIT_RANKING', data: { order: aheadOrder } }, actor, deps);
+    expect((ahead.room.currentRound?.moduleState as { submissions: Record<string, { order: string[] }> }).submissions[actor]?.order).toEqual(aheadOrder);
 
-    const stale = sendPlayer(ahead.room, ahead.priv, { type: 'player:submitAction', phaseId: ahead.room.phase.phaseId, playerId: actor, seq: 3, actionId: 'a3-late', actionType: 'noop', data: null }, actor, deps);
+    const stale = sendPlayer(ahead.room, ahead.priv, { type: 'player:submitAction', phaseId: ahead.room.phase.phaseId, playerId: actor, seq: 3, actionId: 'a3-late', actionType: 'SUBMIT_RANKING', data: { order: staleOrder } }, actor, deps);
 
     expect(stale.rejected?.code).toBe('OUT_OF_ORDER');
-    expect((stale.room.currentRound?.moduleState as { ticks: number }).ticks).toBe(1); // unchanged
+    expect((stale.room.currentRound?.moduleState as { submissions: Record<string, { order: string[] }> }).submissions[actor]?.order).toEqual(aheadOrder);
   });
 
   it('a non-participant submitting an action is rejected', () => {
@@ -81,7 +75,7 @@ describe('Mini-game gameplay actions', () => {
 
     expect(hostForced.room.phase.state).toBe('RESULTS_REVEAL');
     expect(hostForced.room.roundHistory).toHaveLength(1);
-    expect(hostForced.room.roundHistory[0]?.success).toBe(true);
+    expect(hostForced.room.roundHistory[0]?.success).toBe(false);
     expect(hostForced.room.currentRound).not.toBeNull(); // still populated during RESULTS_REVEAL itself
 
     const afterResults = expireTimer(hostForced.room, hostForced.priv, deps);

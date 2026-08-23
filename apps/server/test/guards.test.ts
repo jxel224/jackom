@@ -27,7 +27,7 @@ describe('Event validation', () => {
     const deps = createTestDeps(149);
     const setup = setupRoom(5, deps); // still in LOBBY
 
-    const result = sendPlayer(setup.room, setup.priv, { type: 'player:submitVote', phaseId: setup.room.phase.phaseId, playerId: setup.playerIds[0]!, targetPlayerId: 'skip' }, setup.playerIds[0]!, deps);
+    const result = sendPlayer(setup.room, setup.priv, { type: 'player:pushButton', phaseId: setup.room.phase.phaseId, playerId: setup.playerIds[0]! }, setup.playerIds[0]!, deps);
 
     expect(result.rejected?.code).toBe('INVALID_EVENT_FOR_STATE');
     expect(result.room.phase.state).toBe('LOBBY');

@@ -33,7 +33,7 @@ export interface CreateRoomResult {
  * ROOM_CREATED is modeled as instantaneous (ARCHITECTURE.md §3.1: "Exit condition: Immediate") —
  * this returns a room already in LOBBY, with the host session issued and NOT present in `players`.
  */
-export function createRoom(config: RoomConfig, deps: Deps): CreateRoomResult {
+export function createRoom(config: RoomConfig, deps: Deps, hostUserId: string | null = null): CreateRoomResult {
   const roomId = deps.generateId();
   const hostSessionToken = deps.generateId();
   const now = deps.now();
@@ -41,7 +41,7 @@ export function createRoom(config: RoomConfig, deps: Deps): CreateRoomResult {
   const room: RoomState = {
     roomId,
     roomCode: generateRoomCode(deps),
-    host: { hostSessionToken, connectionStatus: 'connected', connectedAt: now, lastSeenAt: now },
+    host: { hostSessionToken, connectionStatus: 'connected', connectedAt: now, lastSeenAt: now, hostUserId },
     config,
     players: {},
     phase: { state: 'LOBBY', phaseId: deps.generateId(), phaseStartedAt: now, durationMs: null },
@@ -50,21 +50,25 @@ export function createRoom(config: RoomConfig, deps: Deps): CreateRoomResult {
     firewallActive: false,
     specialGameUsed: false,
     winner: null,
-    matchClock: initMatchClock(config),
+    adminId: null,
+    adminQueue: [],
+    matchClock: initMatchClock(),
+    hackerCount: 0,
     currentRound: null,
     currentSpecialRound: null,
-    currentVote: null,
+    currentAccusation: null,
+    accusationCooldownUntil: null,
     currentPhaseSubmissions: {},
     roundHistory: [],
     specialRoundHistory: [],
-    voteHistory: [],
+    accusationHistory: [],
     matchLog: [],
     stateVersion: 0,
     createdAt: now,
     updatedAt: now,
   };
 
-  const priv: RoomPrivateState = { roomId, players: {}, currentCorruptionChoices: {} };
+  const priv: RoomPrivateState = { roomId, players: {}, hacksRemaining: {} };
 
   return { room, priv, hostSessionToken };
 }

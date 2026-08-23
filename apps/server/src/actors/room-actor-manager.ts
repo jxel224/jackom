@@ -52,16 +52,22 @@ export class RoomActorManager {
   private readonly actors = new Map<string, RoomActor>();
   private readonly ttlSeconds: number;
   private readonly logger: RoomLogger;
-  private hooks: RoomActorLifecycleHooks = {};
+  /**
+   * A LIST, not a single slot: `PhaseTimerService` and `MatchClockService` (Core Logic Phase 1)
+   * each register their own independent set of hooks in their own constructors. If this were a
+   * single replaced slot (the original Step 5 design, when only one consumer existed), the second
+   * service's registration would silently clobber the first's — see CORE_LOGIC_PHASE1_REPORT.md §5.
+   */
+  private hooksList: RoomActorLifecycleHooks[] = [];
 
   constructor(private readonly deps: RoomActorManagerDeps) {
     this.ttlSeconds = deps.ttlSeconds ?? DEFAULT_ROOM_TTL_SECONDS;
     this.logger = deps.logger ?? noopRoomLogger;
   }
 
-  /** Registers (replacing any previous) lifecycle hooks. See `RoomActorLifecycleHooks` for what each fires on. */
+  /** Registers an ADDITIONAL set of lifecycle hooks — see `RoomActorLifecycleHooks` for what each fires on. Multiple independent registrants are supported; none replaces another. */
   setLifecycleHooks(hooks: RoomActorLifecycleHooks): void {
-    this.hooks = hooks;
+    this.hooksList.push(hooks);
   }
 
   private buildActorDeps() {
@@ -73,7 +79,9 @@ export class RoomActorManager {
       sessionRepo: this.deps.sessionRepo,
       ttlSeconds: this.ttlSeconds,
       logger: this.logger,
-      onMutated: (room: RoomState) => this.hooks.onMutated?.(room),
+      onMutated: (room: RoomState) => {
+        for (const hooks of this.hooksList) hooks.onMutated?.(room);
+      },
     };
   }
 
@@ -81,8 +89,8 @@ export class RoomActorManager {
    * Persists a brand-new room (public state, private state, roomCode lookup, host session) and
    * registers a pre-hydrated actor for it in the same call — "room creation persistence."
    */
-  async createRoom(config: RoomConfig): Promise<CreatedRoomHandle> {
-    const { room, priv, hostSessionToken } = createRoom(config, this.deps.fsmDeps);
+  async createRoom(config: RoomConfig, hostUserId: string | null = null): Promise<CreatedRoomHandle> {
+    const { room, priv, hostSessionToken } = createRoom(config, this.deps.fsmDeps, hostUserId);
 
     await this.deps.roomStateRepo.save(room, this.ttlSeconds);
     await this.deps.roomPrivateStateRepo.save(priv, this.ttlSeconds);
@@ -92,9 +100,9 @@ export class RoomActorManager {
     const actor = new RoomActor(room.roomId, this.buildActorDeps(), { room, priv });
     this.actors.set(room.roomId, actor);
     // Pre-hydrated, not "created from nothing" — no onActorCreated (nothing to recover from Redis).
-    // Still fire onMutated so a timer service in front of this manager is in sync from the start
+    // Still fire onMutated so every registered timer-like service is in sync from the start
     // (LOBBY has no phase timer today, but this keeps the contract uniform regardless of config).
-    this.hooks.onMutated?.(room);
+    for (const hooks of this.hooksList) hooks.onMutated?.(room);
 
     return { roomId: room.roomId, roomCode: room.roomCode, hostSessionToken };
   }
@@ -110,7 +118,7 @@ export class RoomActorManager {
     if (existing) return existing;
     const created = new RoomActor(roomId, this.buildActorDeps());
     this.actors.set(roomId, created);
-    this.hooks.onActorCreated?.(roomId, created);
+    for (const hooks of this.hooksList) hooks.onActorCreated?.(roomId, created);
     return created;
   }
 
@@ -134,7 +142,9 @@ export class RoomActorManager {
     if (!actor) return false;
     if (actor.isBusy()) return false;
     const removed = this.actors.delete(roomId);
-    if (removed) this.hooks.onActorEvicted?.(roomId);
+    if (removed) {
+      for (const hooks of this.hooksList) hooks.onActorEvicted?.(roomId);
+    }
     return removed;
   }
 
@@ -150,7 +160,7 @@ export class RoomActorManager {
       }
     }
     for (const roomId of evicted) {
-      this.hooks.onActorEvicted?.(roomId);
+      for (const hooks of this.hooksList) hooks.onActorEvicted?.(roomId);
     }
     return evicted;
   }

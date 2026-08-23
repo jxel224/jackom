@@ -13,8 +13,6 @@ export interface MiniGameContext {
   minigameId: string;
   /** Eligible participants for regular games, selected subset for the special game. */
   participantIds: string[];
-  /** Always false for the special game. Server-computed, module-visible, NOT client-visible until reveal policy allows. */
-  corrupted: boolean;
   /** Module-specific config, opaque to the FSM. */
   config: JsonValue;
 }
@@ -34,11 +32,15 @@ export interface MiniGameResolution {
 
 export interface MiniGameInstructions {
   default: JsonValue;
-  /** Shown instead of default when ctx.corrupted === true, only if the module defines a distinct variant. */
-  corrupted?: JsonValue;
 }
 
 export type MiniGameResolveReason = 'completed' | 'timeout' | 'forced';
+
+/** Projection-only context supplied by the safe view builders. */
+export interface MiniGameViewContext {
+  /** True only after the round has entered its public result phase. */
+  revealResults: boolean;
+}
 
 export interface MiniGameModule<TState extends JsonValue = JsonValue> {
   id: string;
@@ -52,19 +54,24 @@ export interface MiniGameModule<TState extends JsonValue = JsonValue> {
    * malformed payload, not a participant) without ever mutating state. The FSM enforces that this
    * is always called first; a module cannot skip validation by only implementing handleAction.
    */
-  validateAction(state: TState, playerId: string, ctx: MiniGameContext, action: JsonValue): MiniGameActionValidation;
-  handleAction(state: TState, playerId: string, action: JsonValue): TState;
+  validateAction(state: TState, playerId: string, ctx: MiniGameContext, action: JsonValue, actionType?: string): MiniGameActionValidation;
+  handleAction(state: TState, playerId: string, action: JsonValue, actionType?: string): TState;
 
   isComplete(state: TState): boolean;
   resolve(state: TState, reason: MiniGameResolveReason): MiniGameResolution;
 
+  /** Optional support for bounded internal steps while the global FSM remains in MINIGAME_PLAY. */
+  getInternalStep?(state: TState): string;
+  /** Called on the current internal step's server-owned timer expiry. */
+  handleTimeout?(state: TState, ctx: MiniGameContext): TState;
+
   handleDisconnect(state: TState, playerId: string): TState;
 
   getInstructions(ctx: MiniGameContext): MiniGameInstructions;
-  getDurationMs(ctx: MiniGameContext): number;
+  getDurationMs(ctx: MiniGameContext, state?: TState): number;
 
-  buildTvView(state: TState): JsonValue;
-  buildPlayerView(state: TState, playerId: string, role: Role): JsonValue;
+  buildTvView(state: TState, view: MiniGameViewContext): JsonValue;
+  buildPlayerView(state: TState, playerId: string, role: Role, view: MiniGameViewContext): JsonValue;
   /** For eliminated / non-participant players — never the same payload as buildPlayerView. */
-  buildSpectatorView(state: TState): JsonValue;
+  buildSpectatorView(state: TState, view: MiniGameViewContext): JsonValue;
 }

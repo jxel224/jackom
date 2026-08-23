@@ -21,7 +21,7 @@ describe('SiteNav', () => {
     expect(screen.getAllByRole('link', { name: 'الألعاب' }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'انضم' }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'الحساب' }).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole('button', { name: 'أنشئ غرفة' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('link', { name: 'أنشئ غرفة' }).length).toBeGreaterThan(0);
   });
 
   it('the mobile menu toggle is keyboard-operable and exposes aria-expanded/aria-controls, never a mega-menu', () => {

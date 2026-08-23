@@ -1,41 +1,65 @@
+'use client';
+
+import Link from 'next/link';
 import { IllustratedEmptyState } from '../../components/ui/IllustratedEmptyState';
 import { PageContainer } from '../../components/ui/PageContainer';
 import { SectionTitle } from '../../components/ui/SectionTitle';
 import { SiteNav } from '../../components/nav/SiteNav';
+import { Panel } from '../../components/ui/Panel';
+import { Button } from '../../components/ui/Button';
+import { buttonClassName } from '../../components/ui/button-styles';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { useCurrentUser } from '../../lib/auth/useCurrentUser';
 
-/** Account shell — no real authentication exists yet (explicitly out of scope). Every section here is an honest placeholder, never simulated data. */
+/** Real authentication state (Permanent Business Backend) — every other section here remains an honest placeholder for future steps. */
 export default function AccountPage() {
+  const currentUser = useCurrentUser();
+
   return (
     <>
       <SiteNav />
       <PageContainer className="flex max-w-4xl flex-col gap-8 py-10">
-        <SectionTitle as="h1" subtitle="تسجيل الدخول وإدارة الحساب ستكونان متاحتين في خطوة قادمة">
+        <SectionTitle as="h1" subtitle="إدارة حسابك وألعابك المملوكة">
           الحساب
         </SectionTitle>
 
+        {currentUser.status === 'loading' ? (
+          <Panel className="flex items-center justify-center py-8">
+            <LoadingIndicator size="lg" label="جارٍ التحقق من الحساب" />
+          </Panel>
+        ) : currentUser.status === 'authenticated' ? (
+          <Panel variant="hard" className="flex flex-col gap-4" data-account-authenticated>
+            <div>
+              <p className="text-sm text-ink-muted">مسجّل الدخول باسم</p>
+              <p className="text-xl font-bold">{currentUser.user.displayName}</p>
+              <p dir="ltr" className="text-end text-sm text-ink-subtle">
+                {currentUser.user.email}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <Link href="/games" className={buttonClassName({ variant: 'secondary' })}>
+                ألعابي
+              </Link>
+              <Button type="button" variant="danger" onClick={() => void currentUser.logout()}>
+                تسجيل الخروج
+              </Button>
+            </div>
+          </Panel>
+        ) : (
+          <Panel variant="hard" className="flex flex-col items-center gap-4 py-8 text-center" data-account-unauthenticated>
+            <p className="text-ink-muted">سجّل الدخول لإدارة ألعابك المملوكة واستضافة الغرف.</p>
+            <div className="flex gap-3">
+              <Link href="/login" className={buttonClassName()}>
+                تسجيل الدخول
+              </Link>
+              <Link href="/register" className={buttonClassName({ variant: 'secondary' })}>
+                إنشاء حساب
+              </Link>
+            </div>
+          </Panel>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <IllustratedEmptyState
-            title="تسجيل الدخول"
-            description="سجّل دخولك لحفظ إعداداتك عبر أجهزتك."
-            futureLabel="قريبًا"
-            icon={
-              <svg aria-hidden="true" viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="8" r="4" />
-                <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" />
-              </svg>
-            }
-          />
-          <IllustratedEmptyState
-            title="الألعاب المملوكة"
-            description="ألعاب إضافية يمكن اقتناؤها لاحقًا ستظهر هنا."
-            futureLabel="قريبًا"
-            icon={
-              <svg aria-hidden="true" viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="6" width="18" height="12" rx="3" />
-                <path d="M8 12h.01M12 9v6M16 12h.01" />
-              </svg>
-            }
-          />
           <IllustratedEmptyState
             title="سجل المشتريات"
             description="ستجد هنا سجلًا بأي عمليات شراء تقوم بها."
@@ -48,8 +72,8 @@ export default function AccountPage() {
             }
           />
           <IllustratedEmptyState
-            title="الحساب"
-            description="إعدادات الملف الشخصي والتفضيلات العامة."
+            title="إعدادات الملف الشخصي"
+            description="تعديل الاسم أو البريد الإلكتروني أو كلمة المرور."
             futureLabel="قريبًا"
             icon={
               <svg aria-hidden="true" viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth="2">

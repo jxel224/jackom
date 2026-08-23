@@ -3,6 +3,7 @@ import type { InboundEvent, RoomConfig } from '../../src/shared.js';
 import type { HandleEventResult } from '../../src/fsm/result.js';
 import { RoomActorManager } from '../../src/actors/room-actor-manager.js';
 import { PhaseTimerService } from '../../src/timers/phase-timer-service.js';
+import { MatchClockService } from '../../src/timers/match-clock-service.js';
 import { FakeTimerScheduler } from '../../src/timers/fake-timer-scheduler.js';
 import type { RoomLogger } from '../../src/persistence/logging.js';
 import type { TimerExpiryCallback } from '../../src/timers/types.js';
@@ -24,9 +25,14 @@ export interface TimerHarness {
   fireExpiry: TimerExpiryCallback;
   /** roomIds passed to the `onRoomMutated` callback, in call order (stands in for "views were broadcast"). */
   mutatedRooms: string[];
+  /** Same shape as `service`/`scheduler`/`fireExpiry`, but for the fully independent MatchClockService — see CORE_LOGIC_PHASE1_REPORT.md §5 for why these are two separate services/schedulers on the same manager. */
+  matchClockService: MatchClockService;
+  matchClockScheduler: FakeTimerScheduler;
+  fireMatchClockExpiry: TimerExpiryCallback;
+  matchClockMutatedRooms: string[];
 }
 
-/** Builds a RoomActorManager + PhaseTimerService pair wired together exactly as production code would, backed by an in-memory KeyValueStore standing in for Redis. */
+/** Builds a RoomActorManager + PhaseTimerService + MatchClockService trio wired together exactly as production code would (both timer-like services registered on the SAME manager), backed by an in-memory KeyValueStore standing in for Redis. */
 export function buildTimerHarness(deps: Deps, repos: ReturnType<typeof buildRepos>, opts: { ttlSeconds?: number; logger?: RoomLogger } = {}): TimerHarness {
   const manager = new RoomActorManager({
     fsmDeps: deps,
@@ -55,7 +61,25 @@ export function buildTimerHarness(deps: Deps, repos: ReturnType<typeof buildRepo
     logger: opts.logger,
   });
 
-  return { manager, service, scheduler, fireExpiry, mutatedRooms };
+  const matchClockMutatedRooms: string[] = [];
+  let matchClockScheduler!: FakeTimerScheduler;
+  let fireMatchClockExpiry!: TimerExpiryCallback;
+
+  const matchClockService = new MatchClockService({
+    manager,
+    now: deps.now,
+    createScheduler: (onExpire) => {
+      fireMatchClockExpiry = onExpire;
+      matchClockScheduler = new FakeTimerScheduler(onExpire);
+      return matchClockScheduler;
+    },
+    onRoomMutated: (roomId) => {
+      matchClockMutatedRooms.push(roomId);
+    },
+    logger: opts.logger,
+  });
+
+  return { manager, service, scheduler, fireExpiry, mutatedRooms, matchClockService, matchClockScheduler, fireMatchClockExpiry, matchClockMutatedRooms };
 }
 
 /**

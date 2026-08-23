@@ -8,6 +8,9 @@ vi.mock('next/font/google', () => ({
   Cairo: () => ({ variable: 'font-cairo-var', className: 'font-cairo-class' }),
   Baloo_Bhaijaan_2: () => ({ variable: 'font-baloo-var', className: 'font-baloo-class' }),
   JetBrains_Mono: () => ({ variable: 'font-jetbrains-mono-var', className: 'font-jetbrains-mono-class' }),
+  // Headquarters (Hacker game) fonts — Bible V1.1 §10.
+  Almarai: () => ({ variable: 'font-almarai-var', className: 'font-almarai-class' }),
+  VT323: () => ({ variable: 'font-vt323-var', className: 'font-vt323-class' }),
 }));
 
 // Must follow the vi.mock() call above.

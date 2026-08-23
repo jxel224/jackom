@@ -5,5 +5,6 @@ export { StickerLabel, type StickerLabelProps, type StickerLabelTone } from './S
 export { GraphicBurst, type GraphicBurstProps, type GraphicBurstAccent } from './GraphicBurst';
 export { ComicArrow, type ComicArrowProps } from './ComicArrow';
 export { DecorativeSpark, type DecorativeSparkProps, type DecorativeSparkAccent } from './DecorativeSpark';
+export { HackerFigure, type HackerFigureProps } from './HackerFigure';
 export { ConnectionPulse, type ConnectionPulseProps, type ConnectionPulseTone } from './ConnectionPulse';
 export { HeroIllustration, type HeroIllustrationProps } from './HeroIllustration';

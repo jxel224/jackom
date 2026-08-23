@@ -1,6 +1,6 @@
 # Implementation Progress — Development Steps 1, 2, 3, 4, 5, 6, 7A, 7B, 7C & 8A
 
-Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), 7B (browser WebSocket client + real-time lobby), 7C (full local development runner), and 8A (Jackom visual identity + product UX redesign) are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, real mini-games, multi-instance distributed locking/timer coordination, or any gameplay-phase UI (role reveal, corruption, voting, mini-games) were implemented, per scope.
+Status: **Steps 1 (shared types), 2 (in-memory FSM core), 3 (Redis-backed room store + room actor), 4 (WebSocket gateway), 5 (server-owned timer scheduler), 6 (Next.js frontend foundation + Arabic RTL design system), 7A (real room create/join HTTP API + frontend integration), 7B (browser WebSocket client + real-time lobby), 7C (full local development runner), 8A (Jackom visual identity + product UX redesign), all six production normal minigames, and the Bomb Protocol special-game backend are complete.** No PostgreSQL/Prisma, authentication accounts/payments, AWS deployment, multi-instance distributed locking/timer coordination, gameplay-phase UI, or dedicated backend hardening audit was implemented, per scope.
 
 > **Note on project location:** the user's C: drive had 0 bytes free when Steps 1–2 started (confirmed via `df -h`), which blocked directory creation at the original path (`C:\Users\PC\Downloads\fdd\barqsec\jackom`). With the user's approval, all work (Steps 1–4) is built and committed at **`D:\projects\jackom`** (a local git repo — see `git log`) instead; C: is not used for any code, only kept in sync for `ARCHITECTURE.md`/`IMPLEMENTATION_PROGRESS.md` when it has a few hundred KB free (it fluctuates between 0 and ~11MB free and should not be relied on). Running `npx`/`npm` commands in this environment intermittently fails with `ENOSPC` because npx's own resolution and Vite's config-resolution cache write to `C:\Users\...\AppData\Local\Temp` regardless of project location — Step 4's work redirected `TEMP`/`TMP` to a D: path for every install/build/test invocation (e.g. `TEMP="D:\npm-tmp" TMP="D:\npm-tmp" node node_modules/vitest/vitest.mjs run`) and, where even that wasn't enough, called `node node_modules/<pkg>/bin/...` directly instead of going through `npx`.
 
@@ -1311,3 +1311,544 @@ npm --prefix apps/web run build   # next build — succeeds, all 7 routes compil
 - **Verification**: full test suite, full 3-stage typecheck, eslint, and `next build` all pass.
 - **Final logo/character art**: intentionally not implemented — only a temporary SVG/CSS wordmark sticker in `SiteNav`, per scope.
 - Role reveal, gameplay UI, real mini-games, multi-game registry, authentication, payments, PostgreSQL, Prisma, AWS deployment, and Redis schema changes were intentionally **not** started, per the requested scope.
+
+---
+
+# Production Minigame 1 — Rate It
+
+`RATE_IT` is now the only registered regular minigame and replaces the generic regular-game
+placeholder in the live FSM path. It accepts one locked finite numeric value in the inclusive
+0–100 range (decimals preserved), completes when every participant submits or the phase timer
+expires, and records unanswered participants explicitly as `no_answer` rather than inventing a
+score. Exact player/value associations are preserved in `RoundRecord.resultSummary`.
+
+Prompt assignment is isolated in `minigames/rate-it-content.ts`: the module receives only finished
+per-player assignments and does not decide why a player received a variant. The current legacy
+round-wide corruption flag temporarily swaps role-based variants at that boundary, leaving one
+clean replacement point for the future target-based Hack resolver. The fixture is intentionally
+small and is not a content library.
+
+The `MiniGameModule` projection methods now receive `{ revealResults }`, computed only by the safe
+view builders from the authoritative FSM phase. Before `RESULTS_REVEAL`, TV sees counts only and
+each participant sees only their own prompt/submission; during reveal, exact results appear to all
+recipients simultaneously. Reconnection naturally rebuilds the same owner-specific current view.
+
+Verification after implementation:
+
+```text
+npm run typecheck   # zero errors
+npm test            # 66 files, 424 tests: 423 passed, 1 Redis-dependent test skipped
+```
+
+The newer target-based Hack lifecycle, Admin participant selection/fairness, production prompt
+content, gameplay UI, and the remaining two minigames remain intentionally out of scope.
+
+---
+
+# Production Minigame 2 — Complete It
+
+`COMPLETE_IT` is registered alongside `RATE_IT` as the second production regular minigame. It
+accepts one locked `SUBMIT_TEXT` action per participant, trims leading/trailing whitespace,
+preserves internal wording and all Unicode text, and enforces an 80-code-point maximum. Empty,
+whitespace-only, non-string, oversized, malformed, duplicate, wrong-action, and post-completion
+submissions are rejected server-side.
+
+The module completes when all participants submit or resolves through the existing phase timeout.
+Missing submissions become explicit `no_answer` results; submitted answers remain attached to the
+correct player and are never scored, ranked, rewritten, interpreted, or rendered by the backend.
+TV sees only progress before `RESULTS_REVEAL`; each player sees only their own assigned prompt and
+locked answer. All safe answers reveal simultaneously in the existing result phase.
+
+Rate It and Complete It now share only the small `prompt-assignment.ts` boundary that maps a prompt
+pair to finished participant assignments. Legacy corruption compatibility remains isolated there,
+ready to be replaced later without changing either minigame module.
+
+Temporary values: one English fixture pair, 80 Unicode code points, and a 45-second module-owned
+duration. No CMS, UI, new Hack lifecycle, or third minigame was added.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+npm test            # 67 files, 448 tests: 447 passed, 1 Redis-dependent test skipped
+```
+
+---
+
+# Production Minigame 3 — Predict Them
+
+`PREDICT_THEM` is registered alongside `RATE_IT` and `COMPLETE_IT`. The server deterministically
+separates the round participants into a selected group and an audience group with no overlap. The
+current temporary selection chooses three selected players where the lobby permits, always leaving
+at least one audience member.
+
+The module owns two bounded internal steps while the global Hacker FSM remains in
+`MINIGAME_PLAY`: `AUDIENCE_VOTE` and `PREDICTION`. Audience players submit locked A/B votes first;
+selected players then submit locked A/B predictions. Each step has its own 20-second server-owned
+timer. Completing or timing out the audience step refreshes the global phase id and timer through
+the existing FSM/RoomActor path, so stale first-step actions are rejected normally. The second
+timeout resolves the module with explicit missing statuses and cannot softlock.
+
+Majority resolution is a pure deterministic function over audience votes only. Missing votes are
+excluded, ties (including zero votes) return explicit `TIE`, and individual audience votes are
+never included in the public result. Reveal contains only aggregate A/B/no-vote counts and the
+selected players' predictions/no-prediction statuses.
+
+Before reveal, TV receives progress counts without choices; audience players receive the audience
+question and only their own vote state; selected players receive their own role-sensitive prompt
+only during prediction and never receive vote counts or majority. Reconnection rebuilds these same
+owner-specific projections from persisted module state.
+
+The only shared contract extension is optional internal-step support on `MiniGameModule`:
+`getInternalStep`, `handleTimeout`, and state-aware `getDurationMs`. Single-step modules omit these
+hooks and retain their previous behavior unchanged.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+npm test            # 68 files, 474 tests: 473 passed, 1 Redis-dependent test skipped
+```
+
+Temporary decisions: 20 seconds per internal step, explicit `TIE`, one English fixture, and three
+selected players where possible. No UI, Admin-selection redesign, target-based Hack migration, or
+additional minigame beyond Predict Them was added in that pass.
+
+---
+
+# Production Minigame 4 — Draw It
+
+`DRAW_IT` is registered as the fourth production regular minigame. The round setup selects three
+eligible players by default (bounded to the approved 2–4 range) through injected randomness and
+replaces the active round's participant set with that selected subset, so the existing FSM rejects
+non-selected submissions before the module is reached.
+
+The final-only drawing contract is compact JSON vector data: `strokes[]`, each containing normalized
+`points[{x,y}]` where both coordinates are finite numbers in the inclusive 0–1 range. Empty
+`strokes: []` is an accepted, locked blank canvas and remains structurally distinct from a timed-out
+player's `no_answer`. No point streaming, binary upload, rasterization, or asset storage was added.
+
+Hard module limits are 32 strokes, 256 points per stroke, and 2,048 points total, in addition to the
+gateway's existing message-size limit. Strict Zod schemas reject extra authority/metadata fields,
+malformed nesting, strings/non-finite coordinates, out-of-range values, and oversized collections
+before module state changes.
+
+During drawing, TV receives only participant ids and submission counts; each selected player sees
+only their own prompt and lock/blank status; spectators see waiting information. Stroke data and
+prompt variants remain absent from all non-owner/public projections until `RESULTS_REVEAL`, when all
+submitted drawings and explicit missing entries appear together. Reconnection restores the prompt
+and final lock from JSON-persisted state; an unsent local canvas is intentionally not restored.
+
+Temporary values: 30 seconds, three selected players where possible, one English fixture, and the
+limits above. No shared `MiniGameModule` change was required beyond the internal-step support already
+introduced for Predict Them.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+npm test            # 69 files, 505 tests: 504 passed, 1 Redis-dependent test skipped
+```
+
+Later design audit note: Draw It currently selects 2–3 participants although its approved range is
+2–4. This pass intentionally did not change Draw It.
+
+---
+
+# Production Minigame 5 — Describe It
+
+`DESCRIBE_IT` is registered as the fifth production regular minigame. Round setup selects up to five
+eligible players (requiring at least three), assigns each one a private hidden word through the shared
+prompt-assignment boundary, and creates a server-owned speaking order using injected deterministic
+randomness. The current English fixture pair is `Airport` / `Train Station`.
+
+The module owns `THINK → SPEAKING → COMPLETED` while the global FSM stays in `MINIGAME_PLAY`.
+Preparation lasts 9 seconds and each speaking turn lasts 12 seconds. Players submit only the strict
+empty `FINISH_SPEAKING` action; no clue text or audio is collected. A finish or timeout records one
+bounded result and advances exactly one position. The internal-step key includes the speaker index,
+which makes the existing FSM refresh its phase id and server deadline on every turn; an expired old
+timer or stale action therefore cannot advance a later speaker.
+
+Disconnecting does not alter speaking state. The player's current or future turn retains its normal
+deadline, reconnect restores the persisted order/current speaker/turn status and their own hidden
+word, and timeout prevents softlock. Module state is bounded JSON composed only of arrays, records,
+strings, and numbers.
+
+During active play TV and spectators see safe order/progress/current-speaker information but neither
+word. A selected player sees only their completed assignment, never the alternate word, role, or
+corruption information. At `RESULTS_REVEAL`, all audiences receive only the two possible words;
+player-to-word and player-to-role mappings are never exposed.
+
+No shared `MiniGameModule` change was required. Describe It reuses the optional internal-step,
+state-dependent duration, and timeout hooks introduced for Predict Them.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+focused tests       # 5 minigame files, 115 passed
+npm test            # 70 files, 518 tests: 517 passed, 1 Redis-dependent test skipped
+```
+
+No recording, streaming, transcription, speech recognition, clue validation, scoring, UI, final
+Arabic word library, or Defend It implementation was added.
+
+---
+
+# Production Minigame 6 — Defend It
+
+`DEFEND_IT` completes the six-game production normal-minigame registry. Round setup selects up to
+four eligible players (minimum two), assigns private statements through the existing prompt boundary,
+and uses injected deterministic randomness for both speaking order and a precomputed non-speaker
+follow-up asker for every turn. The temporary strategy is isolated as `RANDOM_ELIGIBLE_PLAYER` so a
+future Admin/fairness policy can replace it without changing module flow.
+
+The module keeps the global FSM in `MINIGAME_PLAY` while running `PREP → DEFENCE →
+FOLLOW_UP_QUESTION → FOLLOW_UP_RESPONSE`, repeating the three verbal stages for each speaker and
+then completing. Durations are 10, 15, 8, and 10 seconds respectively. Strict empty finish actions
+advance each stage early; otherwise server-owned timeouts advance automatically. The internal step
+key combines stage and speaker index, refreshing `phaseId` and deadline after every transition so an
+old action/timer cannot skip a stage, skip a speaker, or complete twice.
+
+Disconnects deliberately leave state unchanged in defence, question, and response. Reconnecting
+players recover their private statement plus safe persisted order, current speaker/asker, active
+stage, and owner flags. Normal timeouts prevent a disconnected participant from softlocking play.
+
+Before reveal, TV and spectators see only safe stage/progress/speaker/asker data, while each selected
+player sees only their own statement. After completion, all audiences receive the two possible
+statements as a neutral array with no Crew/Hacker labels and no player assignment or role mapping.
+No spoken content, audio, transcription, evaluation, suspicion score, or unbounded history is stored.
+
+No shared `MiniGameModule` change was required; the existing internal-step, duration, timeout, view,
+RoomActor, persistence, and stale-phase facilities were sufficient.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+focused tests       # 6 minigame files, 131 passed
+npm test            # 71 files, 534 tests: 533 passed, 1 Redis-dependent test skipped
+```
+
+The normal minigame backend set is now 6/6. The next technical phase is gameplay UI and an end-to-end
+playable loop, followed later by the dedicated backend audit/hardening pass; neither was started here.
+
+---
+
+# Special Game — Bomb Protocol
+
+The generic special-game placeholder is replaced in the live registry by `BOMB_PROTOCOL`. The
+existing one-per-match scheduler now selects 3 participants for 4–5-player rooms, 4 for 6–7, and 5
+for 8–10. Injected randomness chooses exactly one temporary Operator, assigns all remaining selected
+players as Analysts, generates the bounded puzzle, and distributes private clues once at special-game
+start. Social-deduction Crew/Hacker roles remain unrelated and are never exposed.
+
+Bomb Protocol uses one uninterrupted 90-second `SPECIAL_GAME_PLAY` phase across three internal
+modules: `SYMBOLS → WIRES → CODE_SEQUENCE`. Correct Operator actions advance progress; incorrect
+valid actions add one strike while preserving module progress. Three strikes resolve immediate
+failure. Module transitions intentionally do not transition the global FSM, so they retain the
+original `phaseId`, `phaseStartedAt`, and deadline rather than restarting the overall countdown.
+
+Puzzle generation uses deterministic templates plus injected shuffling/selection: four ordered
+symbols, a four-wire board with a valid target, and a four-digit bounded code. Required position,
+wire, and code clues are distributed round-robin across Analysts. State stores only bounded JSON and
+is never regenerated on reconnect or persistence restoration.
+
+Operator and TV projections contain the safe current board, module progress, Operator identity, and
+strikes, never solution fields or Analyst clues. Each Analyst receives only their own current-module
+fragments. Spectators receive progress only. Socket-bound authorization permits only the Operator to
+press symbols, cut wires, or submit the code; strict Zod payloads reject wrong-module, malformed, and
+unknown-board actions.
+
+Success flows through the existing Special Game result integration and activates Firewall for the
+next eligible normal round. Timeout or three strikes records failure; the existing result handler
+applies the configured 180-second penalty exactly once when MatchClock is in countdown mode, or logs
+the outcome without gameplay subtraction while its current default mode is `disabled`. Because the
+default clock has no active countdown, no additional pause/resume policy was introduced.
+
+No shared module interface change was needed. The only infrastructure integration changes replace
+the placeholder lookup, generate config before `start`, identify the module as `BOMB_PROTOCOL`, and
+make the default participant rule use the approved scaling.
+
+Verification:
+
+```text
+npm run typecheck   # zero errors
+focused tests       # Bomb + legacy special + six normal minigames: 153 passed
+npm test            # 72 files, 551 tests: 550 passed, 1 Redis-dependent test skipped
+```
+
+The Hacker gameplay backend now contains all 6/6 normal minigames plus Bomb Protocol. Frontend
+gameplay screens, end-to-end playable-loop validation, and the later backend audit/hardening pass
+remain the next phases and were not started here.
+
+---
+
+# Hacker Frontend Gameplay Foundation
+
+The post-lobby static placeholder is replaced by structurally separate TV and Player gameplay roots.
+`TvGameplayRoot` accepts only `TvView`; `PlayerGameplayRoot` accepts `PlayerView` plus the owning
+connection's `PrivatePlayerPayload`. Both reuse the existing host/player realtime hooks and session
+reconnect flows, then dispatch through a surface-specific phase router and a seven-id minigame router.
+No combined TV/private frontend state type was introduced.
+
+All Hacker phases now have stable shared-shell routing, including safe fallbacks for unsupported
+phase/game data. The normal six IDs and `BOMB_PROTOCOL` route to controlled TV/phone placeholders;
+their full controls and result art remain intentionally unimplemented. Components are keyed by the
+authoritative `phaseId` (and Player internal step where present), preventing stale local controllers
+from surviving server transitions.
+
+Reusable pieces include TV/mobile gameplay layouts, a local-display-only deadline countdown with
+normal/warning/urgent/expired states, Player-only private prompt cards, participant/connection
+status, waiting, spectator, submission states, reveal shell, loading/fallback screens, and a gameplay
+error boundary. The mobile layout preserves safe-area padding and thumb-reachable footer support;
+the TV layout uses the existing long-distance typography and 16:9-friendly width. The app-level
+Arabic `dir="rtl"` remains authoritative and numeric countdowns use tabular monospace presentation.
+
+Reconnect banners retain the latest server view during temporary loss and provide a safe retry state.
+When a fresh projection arrives it replaces the old phase screen; the frontend does not infer a
+transition or optimistically mark gameplay completion. Unsent game-specific drafts remain local to
+future controllers and were not globalized.
+
+Verification:
+
+```text
+gameplay foundation tests   # 27 passed
+npm test                    # 73 files, 590 tests: 589 passed, 1 Redis-dependent test skipped
+npm --prefix apps/web run typecheck  # zero errors
+npm --prefix apps/web run lint       # zero errors; one pre-existing QR <img> warning
+npm --prefix apps/web run build      # production build succeeds, 9 routes generated
+git diff --check                     # clean (line-ending warnings only)
+```
+
+No backend/shared contract changed. Full Rate It, other minigame, Bomb board, voting, and final-art UI
+were not added in that foundation step. It was ready for the first real gameplay controller: Rate It.
+
+---
+
+# Hacker Frontend Minigame 1 — Rate It
+
+Rate It now has a complete phone and shared-TV flow on top of the gameplay foundation. The Player
+surface shows only its private prompt, starts at 50 without treating that default as an answer, and
+requires an actual 0–100 integer slider interaction before enabling submission. It sends the generic
+`SUBMIT_RATING` action with `{ value }`, prevents duplicate sends while pending, and waits for the
+authoritative PlayerView before displaying the locked state.
+
+The TV active screen shows only safe public progress, participant totals, and player names. It never
+renders prompt text or rating values before reveal. The reveal places exact submitted values on one
+LTR numeric 0–100 scale, uses deterministic vertical lanes for nearby markers, and lists no-answer
+players separately rather than inventing a value. Player reveal shows only that player's submitted
+value, or an explicit no-answer state.
+
+The generic player realtime hook now creates a unique action id and monotonic sequence, binds the
+action to the current authoritative phase id, exposes pending/error state, and maps server rejection
+to a safe display error. Reconnect restores server-owned submission state; local drafts reset when
+the authoritative phase changes. Spectators receive no interactive control or private prompt.
+
+Verification:
+
+```text
+Rate It frontend tests                 # 13 passed
+focused frontend/realtime tests        # 54 passed
+npm test                              # 74 files, 607 passed, 1 Redis-dependent test skipped
+npm --prefix apps/web run typecheck   # zero errors
+npm --prefix apps/web run lint        # zero errors; one pre-existing QR <img> warning
+npm --prefix apps/web run build       # production build succeeds, 9 routes generated
+```
+
+No backend or shared contract changed for this frontend implementation. The Rate It playable flow is
+complete and the frontend foundation is ready for Complete It.
+
+---
+
+# Core Logic Phase 1 — Admin System, Targeted Hacks, Real Match Clock, Redis Reliability
+
+Status: **complete.** Preceded by a full adversarial audit (`FUNCTIONAL_GAME_AUDIT.md`) and a
+founder-approved rules contract (`GAMEPLAY_RULES_V1.md`), both at the repo root. Full details,
+including the FSM before/after diff, the state-model diff, the timer-architecture design, and the
+complete hack truth table, are in `CORE_LOGIC_PHASE1_REPORT.md` — this entry is the short summary
+the rest of this file's convention expects.
+
+**What changed:** the Admin mechanic (rotating, shuffled, server-validated minigame + participant
+selection) is now real, replacing fully-automatic random selection. The Hacker mechanic was replaced
+end-to-end: the old round-wide `player:submitCorruptionChoice` boolean is gone, replaced by a
+targeted, budgeted `player:submitHack` (2 charges/match, one target, one accepted action/round). The
+match clock is now a real, server-authoritative, deadline-based 15-minute countdown — starts when
+GAME_INTRO exits, pauses for the special game, applies the exact 180s failure penalty, and ends the
+match immediately (Hacker win) at zero — implemented as a second scheduler service
+(`MatchClockService`) fully independent from the existing `PhaseTimerService`, so neither cancels the
+other's timer. The audit's two P0 infra findings were also fixed: the production Redis client now has
+a long-lived `'error'` listener (no more whole-process crash on a connection blip), and
+`RoomActorManager.evictIdle()` is now wired into a periodic sweep in `bootstrap.ts`.
+
+**Deliberately not touched this phase** (see `CORE_LOGIC_PHASE1_REPORT.md` §8 for the full list): the
+RATE_IT → RANK_IT migration, Bomb Protocol's internal gameplay (still no Hacker-sabotage mechanic —
+known, unchanged), any frontend controls (Admin selection, hack targeting, and voting still have zero
+UI — this was a server/business-logic-only phase), and horizontal-scaling/distributed-locking
+concerns (still explicitly out of scope, restated in `GAMEPLAY_RULES_V1.md` §10).
+
+Verification:
+
+```text
+npm test                              # 77 files (76 passed, 1 skipped), 657 tests (656 passed, 1 skipped)
+npm run typecheck                     # shared-types + server + web, zero errors
+npm --prefix apps/web run build       # production build succeeds, 10 routes generated
+git status / git diff                 # confined to server/shared-types logic + the minimal web
+                                       # type-contract fixes needed to keep the frontend compiling
+                                       # (wire-schemas.ts + 4 test fixtures); /quiz untouched
+```
+
+52 new tests were added across 4 new files (`admin-selection.test.ts`, `hack-window.test.ts`,
+`match-clock.test.ts`, `timers/match-clock-service.test.ts`); `corruption.test.ts` was deleted —
+it asserted the now-rejected round-wide corruption model and was fully superseded by
+`hack-window.test.ts`, not preserved for its own sake.
+
+# Core Logic Phase 1.1 — Verification & Hardening
+
+Status: **complete (YES, with one explicitly-scoped exception).** Full details — the hack-secrecy
+privacy fix, the null-`moduleState` crash fix, false-positive test elimination, the match
+clock/Admin/hack truth tables, private-state security matrix, room-recovery evidence, and the
+honest Redis-unavailable-in-this-sandbox caveat — are in `CORE_LOGIC_PHASE1_1_HARDENING_REPORT.md`.
+
+**What changed:** hack targets became genuinely secret (not merely reveal-policy-gated) —
+`LastRoundResultSummary` lost its `hackedPlayerIds` field entirely, and DESCRIBE_IT/DEFEND_IT's
+reveal payloads stopped labeling which variant belonged to which role. A real production crash was
+found and fixed (view builders called during the hack window before `moduleState` existed). The
+`RoomActorManager.hooksList` multi-registrant fan-out and idle-eviction-preserves-Redis-state
+guarantees were proven directly, not just inferred. The dead `MiniGameContext.corrupted` field
+(written, never read) was removed. Real Redis integration remained unverifiable in this sandbox
+(Docker Desktop not running); every other persistence-dependent scenario was verified against
+`InMemoryKeyValueStore` through the real repository/actor layer instead.
+
+675 tests passed / 1 skipped (Redis) at the end of this phase; typecheck and the web build were
+both clean.
+
+# Core Logic Phase 2A — Final Accusation System ("Push the Button")
+
+Status: **complete.** Full details — the FSM before/after diff, the state model, the exact
+strict-majority voting formula, the win-resolution truth table, timer/Admin/Firewall interaction,
+security/reconnect/rehydration evidence, and the test-change classification — are in
+`CORE_LOGIC_PHASE2A_ACCUSATION_REPORT.md`.
+
+**What changed:** the Crew's final accusation path is now fully functional, server-authoritative,
+and testable. Any eligible player may push the button from `DISCUSSION` or `MINIGAME_SELECT`
+(Crew and Hackers alike, indistinguishably); the initiator alone selects exactly `hackerCount`
+suspects (the count is public, the identities never are); the room enters two new states,
+`ACCUSATION_SELECT` and `ACCUSATION_VOTE` (deliberately not reusing the pre-existing `VOTING`
+state, which is a separate, older per-cycle elimination-vote mechanic left completely untouched —
+see `GAMEPLAY_RULES_V1.md` §12 for why the two coexist rather than compete); every eligible player
+then votes APPROVE/REJECT with a frozen voter snapshot and strict majority (a tie always rejects);
+an approved accusation is compared against the real Hacker set **only server-side** — exactly
+right ends the match as a Crew win, anything else (missing Hacker, extra Crew, or a substituted
+Crew player even at the correct count) ends it as a Hacker win, no second attempt. The match clock
+is never paused for an accusation. A rejected accusation returns to `MINIGAME_SELECT` — preserving
+the exact interrupted Admin turn if it began there, or proceeding into the next round's fresh Admin
+rotation if it began from `DISCUSSION` — and starts a configurable cooldown; a cancelled (timed-out)
+accusation does not.
+
+**Deliberately not touched this phase** (see `CORE_LOGIC_PHASE2A_ACCUSATION_REPORT.md` for the
+full list): RANK_IT, any redesign of the existing per-cycle elimination vote, Bomb Protocol's
+internal gameplay, and any frontend gameplay controls — the accusation UI is a placeholder
+fallback panel, same treatment every other server-authoritative phase already gets until its own
+frontend phase.
+
+Verification:
+
+```text
+npm test                              # 79 files (all passed), 729 tests (all passed)
+npm run typecheck                     # shared-types + server + web, zero errors
+npm --prefix apps/web run build       # production build succeeds, 10 routes generated
+git status / git diff                 # confined to server/shared-types logic + the minimal web
+                                       # type-contract fixes needed to keep the frontend compiling
+                                       # (wire-schemas.ts, phase-label tables, and pre-existing
+                                       # fixtures); /quiz untouched
+```
+
+53 new tests were added in one new file, `accusation.test.ts`, covering availability, suspect
+selection, voting (including every explicit threshold example from the spec), resolution,
+concurrency, match-timer interaction, Admin interaction, Firewall interaction, reconnect, crafted
+adversarial actions, and actor/persistence rehydration.
+
+# Final Gameplay Closure — Hacker Game Gameplay & Functional Implementation
+
+Status: **complete.** Full details — the exact legacy-voting removal diff, RANK_IT's design and
+test coverage, the Bomb Protocol sabotage-design audit, the FINAL_RESULTS role-reveal security
+verification, all real-browser Playwright evidence, and the two real bugs found and fixed along the
+way — are in `FINAL_GAMEPLAY_CLOSURE_REPORT.md`.
+
+**What changed:**
+
+- **Legacy elimination voting retired** (locked product decision): `FINAL_DISCUSSION`/`VOTING`/`ELIMINATION_RESULT` removed from `GameState` entirely (not merely made unreachable); `currentVote`/`voteHistory`/`TieBreakRule`/`maxCycles` removed from `RoomState`/`RoomConfig`; `apps/server/src/voting/tally.ts` and `apps/server/src/fsm/win-condition.ts` deleted; the frontend's `VotingPanel`/`TvVotingPanel` deleted. Push the Button (Core Logic Phase 2A) is now the sole way a match resolves early. `MatchRulesConfig.roundsPerCycle` now solely gates the special game's scheduling. New test file `legacy-voting-retired.test.ts` proves the mechanic is unreachable under real play, including a `@ts-expect-error` compile-time proof that the old `GameState` values no longer type-check.
+- **RANK_IT replaces RATE_IT** as the sixth normal minigame (final approved set: DRAW_IT, RANK_IT, COMPLETE_IT, PREDICT_THEM, DEFEND_IT, DESCRIBE_IT). Four shared cards, per-role ranking instruction via the same `assignPromptPair` boundary every other minigame's prompt already uses (no game-specific hack logic), per-player independently randomized initial card order (`deps.rng`, computed by the FSM caller), honest `no_answer` on timeout (never fabricates a submitted order). RATE_IT fully deleted — module, content, tests, frontend components, all registry/participant-limit/title-map entries.
+- **Bomb Protocol's sabotage design verified and closed** — a real audit (not a redesign) confirmed sabotage is already fully emergent through the existing Operator/Analyst action model: `validateAction`/`handleAction` check only "are you the assigned Operator," never role; a Hacker-Analyst's `buildPlayerView` output is byte-identical to a Crew-Analyst's for the same clue slot. Zero Hacker-only code exists or was needed. Confirmed live via real Playwright: participant scaling (5p→3, 7p→4, 8p→10p→5), success→Firewall, the very next hack window bypassed entirely, failure→exactly −180 000 ms.
+- **FINAL_RESULTS role reveal** confirmed impossible before the match ends and public (TV + every player, the full roster) the instant it resolves, reverting to hidden after a real rematch — new server test `views.test.ts` #26, confirmed visually via real-browser screenshots.
+- **A real, previously-undetected bug found and fixed by the real-browser validation pass**: `handleRematchLobby`'s `host:startGame` transitioned to plain `LOBBY` instead of `ROLE_ASSIGNMENT`, silently requiring a second, identically-labeled click before a rematch actually started. No unit test had ever driven a rematch through the real `host:startGame` event (only through the unrelated `host:restartMatch` shortcut). Fixed in `transitions.ts`; covered by `room-lifecycle.test.ts` #24 and reconfirmed live in the 6-player golden-match browser run.
+- **Real-browser Playwright validation** (`e2e/`, plain Playwright scripts, isolated browser contexts per participant + a separate TV context, headless Chromium installed to a D:-drive path to work around this machine's near-zero C:-drive free space): a 4-player full match to a winner; a 6-player "golden match" playing RANK_IT + three other distinct minigames, a real Bomb Protocol solve (Analyst clues relayed to real Operator clicks) resulting in Firewall activation and a verified next-round hack-window bypass, a manual Push-the-Button → suspect selection → group vote → FINAL_RESULTS → one-click rematch; a 10-player scale run confirming exactly 3 Hackers, the real RANK_IT 5-participant cap, Bomb Protocol selecting exactly 5, and the accusation UI requiring exactly 3 suspects; a dedicated reconnect pass (real page reloads, same session) across Admin selection/Hacker target-select/RANK_IT/DRAW_IT/Bomb Operator/Bomb Analyst/accusation voting; a dedicated timeout pass proving five consecutive phases left with zero client action (Admin selection, hack window, instructions, a full un-answered MINIGAME_PLAY, discussion) never soft-lock and the match remains fully completable afterward. Evidence screenshots under `final-gameplay-evidence/`.
+
+**Deliberately not touched this phase** (explicitly out of scope per the closure directive):
+PostgreSQL, Prisma, user accounts, authentication, payments, ownership, final pixel-art/animation
+polish, marketing pages, `/quiz`. The HTTP API's per-IP rate limiter was left untouched (its default
+10 requests/60s is legitimate anti-abuse infrastructure the real-browser test scripts had to pace
+around, not a gameplay concern).
+
+Verification:
+
+```text
+npm test                              # 79 files (all passed), 777 tests (all passed)
+npm run typecheck                     # shared-types + server + web, zero errors
+npm --prefix apps/web run build       # production build succeeds, 9 routes generated
+git status / git diff                 # confined to gameplay/FSM/frontend logic + this phase's new
+                                       # e2e/ Playwright scripts and evidence screenshots;
+                                       # PostgreSQL/auth/payments/marketing/quiz untouched
+```
+
+**HACKER GAME — GAMEPLAY & FUNCTIONAL IMPLEMENTATION CLOSED.**
+
+# Permanent Business Backend Foundation
+
+Status: **complete.** Full details — the schema, the Prisma-driver-adapter bug found and fixed, the
+exact auth/session/ownership/room-authorization implementations, the Redis/Postgres boundary proof,
+the real-Postgres test matrix, real-browser E2E evidence, and the itemized security review — are in
+`PERMANENT_BACKEND_FOUNDATION_REPORT.md`.
+
+**What changed:** PostgreSQL + Prisma (the new `prisma-client` generator with an explicit
+`@prisma/adapter-pg` driver adapter) were added as a second, completely separate data layer
+alongside the existing Redis-backed realtime architecture — never merged, never coupled. Four
+tables: `User` (permanent host/purchaser account — email/password-hash/displayName), `Game`
+(platform-level, only `hackers` seeded), `GameOwnership` (User↔Game many-to-many with a
+database-level `@@unique([userId, gameId])` constraint), and `Session` (login session — HMAC-hashed
+bearer token in an `HttpOnly`/`SameSite=Lax` cookie, deliberately named to avoid colliding with the
+pre-existing Redis `HostSessionRecord`/`PlayerSessionRecord` reconnect-token concept). Full
+register/login/logout/`GET /me` flow with bcrypt hashing and anti-enumeration login (unknown
+account and wrong password return the identical error). `POST /api/rooms` now requires
+authentication and verified, active game ownership *before* any Redis room is created —
+`RoomActor`/the FSM remain entirely unaware of Prisma; the only value crossing the boundary is a
+bare `hostUserId` string stored once on room creation. The pre-existing guest `/join` flow was left
+completely untouched and is regression-tested end-to-end (including a real-browser Playwright run)
+to prove Players still need no account. `GET /games/owned` powers a minimal `/games` frontend that
+only shows a functional "أنشئ غرفة" action for games the authenticated User actually owns; the
+marketing-wide nav/hero Create Room button — found by the E2E run to be a redundant,
+ownership-unaware duplicate of that same action — was repurposed into a plain navigation link to
+`/games`, the one real authorized surface. A dev-only `db:grant-ownership` CLI script is the sole
+sanctioned way to grant ownership without Stripe (which is not implemented).
+
+**Deliberately not touched this phase** (explicitly out of scope): Stripe/payments/checkout,
+password reset, email verification, account management (change password/email), match history,
+the other three roadmap games, final visual/pixel-art polish, and all gameplay logic — the FSM,
+minigames, Bomb Protocol, and accusation system are byte-for-byte unchanged except for the single
+`hostUserId` parameter threaded through `createRoom`.
+
+Verification:
+
+```text
+npm test                              # 82 files (all passed), 820 tests (all passed)
+npm run typecheck                     # shared-types + server + web, zero errors
+npm --prefix apps/web run build       # production build succeeds, 11 routes generated
+git status / git diff                 # confined to the new db/ layer, the auth/ownership HTTP
+                                       # routes, the minimal auth/account/games frontend, and the
+                                       # single hostUserId parameter threaded through room creation;
+                                       # gameplay FSM/minigames/views otherwise untouched, /quiz
+                                       # untouched, no Stripe code anywhere
+```
+
+**JACKOM PERMANENT BUSINESS BACKEND FOUNDATION CLOSED.**

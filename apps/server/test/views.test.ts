@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createTestDeps } from './helpers/test-deps.js';
-import { ackAllReveals, driveToVoting, hackerIdsOf, sendPlayer, setupRoom, startGame } from './helpers/room.js';
+import { handleEvent } from '../src/fsm/transitions.js';
+import {
+  ackAllReveals, castAccusationVotes, driveToDiscussion, hackerIdsOf, pushButton, setupRoom, startGame, submitAccusation, submitAccusationVote,
+} from './helpers/room.js';
 import { createDefaultConfig } from '../src/config/defaults.js';
 import { buildTvView } from '../src/views/build-tv-view.js';
 import { buildPlayerView } from '../src/views/build-player-view.js';
@@ -24,10 +27,15 @@ describe('View projections never leak private data', () => {
     const acked = ackAllReveals(started.room, started.priv, setup.playerIds, deps);
     checkpoints.push(acked);
 
-    const atVoting = driveToVoting(setup, deps);
-    checkpoints.push(atVoting);
-    const voter = setup.playerIds[0]!;
-    const votedResult = sendPlayer(atVoting.room, atVoting.priv, { type: 'player:submitVote', phaseId: atVoting.room.phase.phaseId, playerId: voter, targetPlayerId: setup.playerIds[1]! }, voter, deps);
+    const atDiscussion = driveToDiscussion(setup, deps);
+    checkpoints.push(atDiscussion);
+
+    // The one remaining final-result mechanic (the legacy per-cycle elimination vote was retired) —
+    // push the button and cast real accusation votes, checking individual votes never leak either.
+    const initiatorId = setup.playerIds.find((id) => !hackerIdsOf(atDiscussion.priv).includes(id))!;
+    const pushed = pushButton(atDiscussion.room, atDiscussion.priv, initiatorId, deps);
+    checkpoints.push(pushed);
+    const votedResult = submitAccusationVote(pushed.room, pushed.priv, setup.playerIds[0]!, 'REJECT', deps);
     checkpoints.push(votedResult);
 
     for (const { room, priv } of checkpoints) {
@@ -35,21 +43,23 @@ describe('View projections never leak private data', () => {
       const tvJson = JSON.stringify(tv);
       expect(tvJson).not.toContain('"role"');
       expect(tvJson).not.toContain('HACKER');
-      for (const token of sessionTokens) expect(tvJson).not.toContain(token);
-      expect(tvJson).not.toContain(hostToken);
+      // Exact-value match (quoted), not bare substring containment — sequential deterministic test
+      // ids ("id-5" vs "id-53") can otherwise collide as substrings without any real token leaking.
+      for (const token of sessionTokens) expect(tvJson).not.toContain(`"${token}"`);
+      expect(tvJson).not.toContain(`"${hostToken}"`);
 
       for (const playerId of setup.playerIds) {
         const pv = buildPlayerView(room, priv, playerId);
         const pvJson = JSON.stringify(pv);
         expect(pvJson).not.toContain('"role"');
         expect(pvJson).not.toContain('HACKER');
-        for (const token of sessionTokens) expect(pvJson).not.toContain(token);
-        expect(pvJson).not.toContain(hostToken);
-        // Every OTHER player's individual vote must not appear verbatim in this player's own view.
-        if (room.currentVote) {
-          for (const [otherVoter, target] of Object.entries(room.currentVote.votes)) {
+        for (const token of sessionTokens) expect(pvJson).not.toContain(`"${token}"`);
+        expect(pvJson).not.toContain(`"${hostToken}"`);
+        // Every OTHER player's individual accusation vote must not appear verbatim in this player's own view.
+        if (room.currentAccusation) {
+          for (const [otherVoter, vote] of Object.entries(room.currentAccusation.votes)) {
             if (otherVoter === playerId) continue;
-            expect(pvJson).not.toContain(`"${otherVoter}":"${target}"`);
+            expect(pvJson).not.toContain(`"${otherVoter}":"${vote}"`);
           }
         }
       }
@@ -82,5 +92,54 @@ describe('View projections never leak private data', () => {
     const view = buildPrivatePlayerView(setup.priv, setup.playerIds[0]!);
 
     expect(view).toBeNull();
+  });
+
+  it('26. FINAL_RESULTS publicly reveals every real role to TV and to every player — impossible before the match ends, and hidden again after a rematch (Final Gameplay Closure PART 4)', () => {
+    const deps = createTestDeps(311);
+    const setup = setupRoom(6, deps, NO_SPECIAL_GAME);
+    const atDiscussion = driveToDiscussion(setup, deps);
+    const realHackerIds = hackerIdsOf(atDiscussion.priv).sort();
+
+    // Before the match ends, finalReveal must be null everywhere — even though buildTvView/
+    // buildPlayerView are handed the real `priv` (i.e. this is gated on room.winner, not merely on
+    // whether the caller happens to have access to private state).
+    expect(buildTvView(atDiscussion.room, atDiscussion.priv).finalReveal).toBeNull();
+    for (const playerId of setup.playerIds) {
+      expect(buildPlayerView(atDiscussion.room, atDiscussion.priv, playerId).finalReveal).toBeNull();
+    }
+
+    // Push the button, correctly accuse the exact real Hacker set, and unanimously approve —
+    // the sole way (post-legacy-voting-retirement) a match resolves to FINAL_RESULTS with a winner.
+    const initiatorId = setup.playerIds.find((id) => !realHackerIds.includes(id))!;
+    const pushed = pushButton(atDiscussion.room, atDiscussion.priv, initiatorId, deps);
+    const accused = submitAccusation(pushed.room, pushed.priv, initiatorId, realHackerIds, deps);
+    const resolved = castAccusationVotes(accused.room, accused.priv, setup.playerIds, 'APPROVE', deps);
+
+    expect(resolved.room.phase.state).toBe('FINAL_RESULTS');
+    expect(resolved.room.winner).toBe('crew');
+
+    const expectedReveal = setup.playerIds
+      .map((playerId) => ({ playerId, role: resolved.priv.players[playerId]!.role }))
+      .sort((a, b) => a.playerId.localeCompare(b.playerId));
+
+    const tvReveal = buildTvView(resolved.room, resolved.priv).finalReveal;
+    expect(tvReveal?.slice().sort((a, b) => a.playerId.localeCompare(b.playerId))).toEqual(expectedReveal);
+    expect(tvReveal!.some((entry) => entry.role === 'HACKER')).toBe(true); // the reveal is genuinely there, not vacuously empty
+
+    // Every player — Hacker and Crew alike — receives the FULL reveal (every player's role), not
+    // merely their own; that's what makes it a "reveal" rather than the ordinary private self-view.
+    for (const playerId of setup.playerIds) {
+      const pvReveal = buildPlayerView(resolved.room, resolved.priv, playerId).finalReveal;
+      expect(pvReveal?.slice().sort((a, b) => a.playerId.localeCompare(b.playerId))).toEqual(expectedReveal);
+    }
+
+    // A real rematch resets `winner` to null — the reveal must become impossible again immediately,
+    // not linger from the previous match.
+    const restarted = handleEvent(resolved.room, resolved.priv, { type: 'host:restartMatch' }, { kind: 'host' }, deps);
+    expect(restarted.room.winner).toBeNull();
+    expect(buildTvView(restarted.room, restarted.priv).finalReveal).toBeNull();
+    for (const playerId of setup.playerIds) {
+      expect(buildPlayerView(restarted.room, restarted.priv, playerId).finalReveal).toBeNull();
+    }
   });
 });

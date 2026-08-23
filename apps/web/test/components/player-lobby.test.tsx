@@ -27,6 +27,10 @@ function baseResult(overrides: Partial<UsePlayerRealtimeResult> = {}): UsePlayer
     view: null,
     privateInfo: null,
     connectionError: null,
+    actionPending: false,
+    actionError: null,
+    submitMinigameAction: vi.fn(() => true),
+    sendPlayerEvent: vi.fn(() => true),
     retry: vi.fn(),
     ...overrides,
   };
@@ -76,11 +80,12 @@ describe('PlayerLobby', () => {
     expect(screen.queryByText(/hostSessionToken/i)).toBeNull();
   });
 
-  it('renders the shared post-lobby placeholder once the phase leaves LOBBY', () => {
+  it('routes into the Player gameplay foundation once the phase leaves LOBBY', () => {
     usePlayerRealtime.mockReturnValue(baseResult({ view: { ...playerView, phase: { ...playerView.phase, state: 'ROLE_ASSIGNMENT' } } }));
     render(<PlayerLobby session={session} />);
 
-    expect(screen.getByText('بدأت اللعبة')).toBeTruthy();
+    expect(screen.getAllByText('توزيع الأدوار')).toHaveLength(2);
+    expect(screen.getByText('الهاكرز')).toBeTruthy();
     expect(screen.queryByText('تم انضمامك، الآن انتظر المضيف.')).toBeNull();
   });
 

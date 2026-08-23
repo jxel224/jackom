@@ -4,7 +4,7 @@ import type { JsonValue, MiniGameModule } from '../shared.js';
  * Generic regular-minigame placeholder (ARCHITECTURE.md §11 dev-order step 8): a no-op module that
  * never completes on its own — it always resolves via timeout/forced-end at the phase's configured
  * duration, and always "succeeds". This exists purely to exercise the MINIGAME_SELECT -> ... ->
- * RESULTS_REVEAL plumbing (and the corruption non-leak path) before any real mini-game is designed.
+ * RESULTS_REVEAL plumbing before any real mini-game is designed.
  *
  * Declared as an intersection with Record<string, JsonValue> (rather than a bare interface) so it
  * structurally satisfies `TState extends JsonValue` — a plain interface has no index signature,

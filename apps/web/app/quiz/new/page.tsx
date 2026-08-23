@@ -1,0 +1,2 @@
+import { QuizSetup } from '../../../components/quiz/QuizSetup'; import { SiteNav } from '../../../components/nav/SiteNav'; import { PageContainer } from '../../../components/ui/PageContainer'; import { SectionTitle } from '../../../components/ui/SectionTitle';
+export default function NewQuizPage(){return <><SiteNav/><PageContainer className="max-w-7xl"><SectionTitle as="h1" subtitle="فريقان، ست فئات، وست وثلاثون فرصة للفوز">أنشئ تحدّي جاكوم</SectionTitle><div className="mt-8"><QuizSetup/></div></PageContainer></>}

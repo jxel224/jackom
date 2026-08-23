@@ -20,6 +20,22 @@ const envSchema = z.object({
   ROOM_TTL_SECONDS: z.coerce.number().int().positive().optional(),
   /** Display-only, for the local startup banner — this process never makes a request to it. */
   FRONTEND_URL: z.string().min(1).default('http://localhost:3000'),
+  /** How often to sweep for idle in-memory room actors (RoomActorManager.evictIdle) — see bootstrap.ts. */
+  IDLE_ACTOR_EVICTION_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  /** How long a room actor may sit untouched before a sweep evicts it from memory (Redis-persisted state is untouched either way). */
+  IDLE_ACTOR_THRESHOLD_MS: z.coerce.number().int().positive().default(1_800_000),
+  /** Permanent business data (Users/Games/GameOwnership/Sessions) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md. No default: an unset value is a real misconfiguration, not something safe to silently paper over. */
+  DATABASE_URL: z.string().min(1),
+  /** HMAC key used to hash auth session tokens before they're stored — see db/services/auth-service.ts. No default; a missing value must fail loudly, never fall back to a guessable constant. */
+  SESSION_TOKEN_SECRET: z.string().min(16),
+  /** `Secure` flag on the auth session cookie — must be true for any real (https) deployment. Read literally, never inferred from NODE_ENV. */
+  SESSION_COOKIE_SECURE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true')
+    .pipe(z.boolean()),
+  /** How long an auth session lasts before it must be re-established by logging in again. */
+  SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(30 * 24 * 60 * 60),
 });
 
 export interface ServerEnvConfig {
@@ -29,6 +45,12 @@ export interface ServerEnvConfig {
   roomTtlSeconds: number;
   frontendUrl: string;
   allowedOrigins: string[];
+  idleActorEvictionIntervalMs: number;
+  idleActorThresholdMs: number;
+  databaseUrl: string;
+  sessionTokenSecret: string;
+  sessionCookieSecure: boolean;
+  sessionTtlSeconds: number;
 }
 
 export function loadServerEnvConfig(source: NodeJS.ProcessEnv = process.env): ServerEnvConfig {
@@ -45,6 +67,12 @@ export function loadServerEnvConfig(source: NodeJS.ProcessEnv = process.env): Se
     roomTtlSeconds: parsed.data.ROOM_TTL_SECONDS ?? DEFAULT_ROOM_TTL_SECONDS,
     frontendUrl: parsed.data.FRONTEND_URL,
     allowedOrigins,
+    idleActorEvictionIntervalMs: parsed.data.IDLE_ACTOR_EVICTION_INTERVAL_MS,
+    idleActorThresholdMs: parsed.data.IDLE_ACTOR_THRESHOLD_MS,
+    databaseUrl: parsed.data.DATABASE_URL,
+    sessionTokenSecret: parsed.data.SESSION_TOKEN_SECRET,
+    sessionCookieSecure: parsed.data.SESSION_COOKIE_SECURE,
+    sessionTtlSeconds: parsed.data.SESSION_TTL_SECONDS,
   };
 }
 

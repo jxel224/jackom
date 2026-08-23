@@ -1,0 +1,2 @@
+import { SavedQuizGames } from '../../components/quiz/SavedQuizGames'; import { SiteNav } from '../../components/nav/SiteNav'; import { PageContainer } from '../../components/ui/PageContainer'; import { SectionTitle } from '../../components/ui/SectionTitle';
+export default function QuizGamesPage(){return <><SiteNav/><PageContainer className="max-w-5xl"><SectionTitle as="h1" subtitle="ابدأ تحديًا جديدًا أو أكمل لعبة محفوظة">تحدّي جاكوم</SectionTitle><div className="mt-8"><SavedQuizGames/></div></PageContainer></>}

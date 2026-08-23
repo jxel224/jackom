@@ -3,6 +3,7 @@ import { createTestDeps } from '../helpers/test-deps.js';
 import { buildRepos } from '../helpers/persistence.js';
 import { requestJson } from '../helpers/http.js';
 import { connectClient, waitForOpen, send, nextMessage } from '../helpers/gateway.js';
+import { buildTestBusinessBackend, createTestHost } from '../helpers/business-backend.js';
 import { RoomActorManager } from '../../src/actors/room-actor-manager.js';
 import { HttpApiServer } from '../../src/http/http-api-server.js';
 import { GatewayServer } from '../../src/gateway/gateway-server.js';
@@ -24,7 +25,19 @@ async function buildCombinedSetup(seed: number) {
     roomLookupRepo: repos.roomLookupRepo,
     sessionRepo: repos.sessionRepo,
   });
-  const httpApi = new HttpApiServer({ roomActorManager: manager, roomLookupRepo: repos.roomLookupRepo, sessionRepo: repos.sessionRepo, fsmDeps: deps });
+  const business = buildTestBusinessBackend();
+  const defaultGameSlug = 'hackers';
+  business.repos.gameRepo.seed({ slug: defaultGameSlug, isActive: true });
+  const defaultHost = await createTestHost(business, defaultGameSlug, seed);
+
+  const httpApi = new HttpApiServer({
+    roomActorManager: manager,
+    roomLookupRepo: repos.roomLookupRepo,
+    sessionRepo: repos.sessionRepo,
+    fsmDeps: deps,
+    authService: business.authService,
+    ownershipService: business.ownershipService,
+  });
   const gateway = new GatewayServer(
     { roomActorManager: manager, roomLookupRepo: repos.roomLookupRepo, sessionRepo: repos.sessionRepo, fsmDeps: deps },
     { authTimeoutMs: 3000, heartbeatIntervalMs: 60_000 },
@@ -37,6 +50,8 @@ async function buildCombinedSetup(seed: number) {
     httpBaseUrl: `http://127.0.0.1:${httpPort}`,
     wsPort,
     manager,
+    defaultHost,
+    defaultGameSlug,
     close: async () => {
       await httpApi.close();
       await gateway.close();
@@ -47,7 +62,7 @@ async function buildCombinedSetup(seed: number) {
 describe('HTTP API and WebSocket gateway share the same authoritative RoomActorManager', () => {
   it('a room created via HTTP is immediately connectable by its host over the WebSocket gateway', async () => {
     const setup = await buildCombinedSetup(301);
-    const created = await requestJson<CreateRoomResponseBody>(`${setup.httpBaseUrl}/api/rooms`, { method: 'POST', body: '{}' });
+    const created = await requestJson<CreateRoomResponseBody>(`${setup.httpBaseUrl}/api/rooms`, { method: 'POST', headers: { Cookie: setup.defaultHost.cookieHeader }, body: JSON.stringify({ gameSlug: setup.defaultGameSlug }) });
     expect(created.status).toBe(201);
 
     const ws = connectClient(setup.wsPort, 'host', created.body.roomCode);
@@ -63,7 +78,7 @@ describe('HTTP API and WebSocket gateway share the same authoritative RoomActorM
 
   it('a player registered via HTTP is immediately connectable over the WebSocket gateway (player:reconnect)', async () => {
     const setup = await buildCombinedSetup(307);
-    const created = await requestJson<CreateRoomResponseBody>(`${setup.httpBaseUrl}/api/rooms`, { method: 'POST', body: '{}' });
+    const created = await requestJson<CreateRoomResponseBody>(`${setup.httpBaseUrl}/api/rooms`, { method: 'POST', headers: { Cookie: setup.defaultHost.cookieHeader }, body: JSON.stringify({ gameSlug: setup.defaultGameSlug }) });
     const joined = await requestJson<JoinRoomResponseBody>(`${setup.httpBaseUrl}/api/rooms/${created.body.roomCode}/players`, {
       method: 'POST',
       body: JSON.stringify({ displayName: 'سارة' }),

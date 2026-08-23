@@ -15,6 +15,16 @@ const MESSAGES: Record<ApiClientErrorCode, string> = {
   NETWORK_ERROR: 'تعذر الاتصال بالخادم. تحقق من اتصالك بالإنترنت.',
   TIMEOUT: 'انتهت مهلة الاتصال بالخادم.',
   NOT_CONFIGURED: 'الخدمة غير متاحة حاليًا.',
+  // Permanent Business Backend (Users/Auth/Ownership) — see PERMANENT_BACKEND_FOUNDATION_REPORT.md.
+  INVALID_EMAIL: 'البريد الإلكتروني غير صالح.',
+  WEAK_PASSWORD: 'كلمة المرور قصيرة جدًا (٨ أحرف على الأقل).',
+  INVALID_DISPLAY_NAME_LENGTH: 'الاسم غير صالح. الرجاء إدخال اسم صحيح.',
+  EMAIL_ALREADY_REGISTERED: 'هذا البريد الإلكتروني مسجّل بالفعل.',
+  INVALID_CREDENTIALS: 'البريد الإلكتروني أو كلمة المرور غير صحيحة.',
+  UNAUTHENTICATED: 'يجب تسجيل الدخول أولًا.',
+  GAME_NOT_FOUND: 'اللعبة غير موجودة.',
+  GAME_NOT_ACTIVE: 'هذه اللعبة غير متاحة حاليًا.',
+  GAME_NOT_OWNED: 'أنت لا تملك هذه اللعبة.',
 };
 
 /** Falls back to the server-supplied message (already Arabic-friendly) when a code has no local override needed, else a safe generic message. */

@@ -4,6 +4,7 @@ import { ackAllReveals, expireTimer, sendHost, setupRoom, startGame } from './he
 import { createDefaultConfig } from '../src/config/defaults.js';
 import type { HandleEventResult } from '../src/fsm/result.js';
 import type { Deps } from '../src/types/deps.js';
+import type { RoomConfig } from '../src/shared.js';
 
 /** Drives exactly one regular round from HACKER_CORRUPTION through to DISCUSSION's resolution. */
 function advanceOneRegularRoundAndResolve(prev: HandleEventResult, deps: Deps): HandleEventResult {
@@ -17,11 +18,15 @@ function advanceOneRegularRoundAndResolve(prev: HandleEventResult, deps: Deps): 
   return r;
 }
 
-function reachFirstHackerCorruption(playerCount: number, deps: Deps, overrides = {}) {
-  const setup = setupRoom(playerCount, deps, overrides);
+function reachFirstHackerCorruption(playerCount: number, deps: Deps, overrides: Partial<RoomConfig> = {}) {
+  const setup = setupRoom(playerCount, deps, {
+    minigameSelection: { minigameSelectionRuleId: 'rank-it-only' },
+    ...overrides,
+  });
   const started = startGame(setup.room, setup.priv, deps);
   const acked = ackAllReveals(started.room, started.priv, setup.playerIds, deps);
-  const atCorruption = expireTimer(acked.room, acked.priv, deps);
+  const afterIntro = expireTimer(acked.room, acked.priv, deps); // GAME_INTRO -> MINIGAME_SELECT (match clock starts here)
+  const atCorruption = expireTimer(afterIntro.room, afterIntro.priv, deps); // Admin selection timeout -> HACKER_CORRUPTION
   return { setup, atCorruption };
 }
 
@@ -49,11 +54,13 @@ describe('Special-game scheduling', () => {
     });
 
     const afterRound1 = advanceOneRegularRoundAndResolve(atCorruption, deps);
-    // Not due yet — only 1 of 2 rounds played this cycle.
-    expect(afterRound1.room.phase.state).toBe('HACKER_CORRUPTION');
+    // Not due yet — only 1 of 2 rounds played this cycle. Lands on the Admin's real selection
+    // window for round 2 (GAMEPLAY_RULES_V1.md §4), not directly on HACKER_CORRUPTION anymore.
+    expect(afterRound1.room.phase.state).toBe('MINIGAME_SELECT');
     expect(afterRound1.room.specialGameUsed).toBe(false);
+    const round2AtCorruption = expireTimer(afterRound1.room, afterRound1.priv, deps); // Admin selection timeout -> HACKER_CORRUPTION
 
-    const afterRound2 = advanceOneRegularRoundAndResolve(afterRound1, deps);
+    const afterRound2 = advanceOneRegularRoundAndResolve(round2AtCorruption, deps);
     // Now due — the cycle's round quota is met.
     expect(afterRound2.room.phase.state).toBe('SPECIAL_GAME_INTRO');
     expect(afterRound2.room.specialGameUsed).toBe(true);
@@ -62,12 +69,9 @@ describe('Special-game scheduling', () => {
 
 describe('Special-game consequences', () => {
   function reachSpecialGameResult(deps: Deps) {
-    // roundsPerCycle: 1 so that after the special game resolves, resolveAfterRoundOrSpecial()
-    // lands on FINAL_DISCUSSION rather than immediately re-entering HACKER_CORRUPTION for a next
-    // round in the same cycle — which would otherwise immediately consume a freshly-activated
-    // Firewall within the same synchronous call, making the "success activates it" assertion
-    // below racier to express than it needs to be. Firewall-consumption-on-the-next-round is
-    // covered by the dedicated Firewall test in corruption.test.ts (#8).
+    // roundsPerCycle: 1 so the special game triggers on schedule after exactly one regular round —
+    // not because of any interaction with the (retired) legacy voting mechanic. Firewall-
+    // consumption-on-the-next-round is covered by the dedicated Firewall test in corruption.test.ts (#8).
     const { atCorruption } = reachFirstHackerCorruption(7, deps, {
       specialGame: { ...createDefaultConfig().specialGame, specialGameScheduleRuleId: 'placeholder-after-first-round-once' },
       rules: { ...createDefaultConfig().rules, roundsPerCycle: 1 },
@@ -77,14 +81,16 @@ describe('Special-game consequences', () => {
 
     let r = expireTimer(afterRound1.room, afterRound1.priv, deps); // -> SPECIAL_GAME_PLAY
     expect(r.room.phase.state).toBe('SPECIAL_GAME_PLAY');
-    r = expireTimer(r.room, r.priv, deps); // GenericSpecialGameModule never completes -> timeout -> failure, -> SPECIAL_GAME_RESULT
+    r = expireTimer(r.room, r.priv, deps); // Bomb Protocol overall timeout -> failure -> SPECIAL_GAME_RESULT
     expect(r.room.phase.state).toBe('SPECIAL_GAME_RESULT');
     return r;
   }
 
-  it('17. success activates the Firewall', () => {
+  it('17. success activates the Firewall and resumes the match clock unchanged', () => {
     const deps = createTestDeps(53);
     const result = reachSpecialGameResult(deps);
+    expect(result.room.matchClock.status).toBe('paused'); // GAMEPLAY_RULES_V1.md §2 — paused for the whole special-game sequence
+    const remainingBefore = result.room.matchClock.remainingMs;
 
     // The placeholder module always resolves as a failure; to exercise the FSM's OWN success-path
     // consequence logic (independent of any concrete special-game's mechanics, which don't exist
@@ -97,32 +103,39 @@ describe('Special-game consequences', () => {
 
     expect(resolved.room.firewallActive).toBe(true);
     expect(resolved.room.matchLog.some((e) => e.type === 'firewall_activated')).toBe(true);
+    expect(resolved.room.matchClock.status).toBe('running');
+    expect(resolved.room.matchClock.remainingMs).toBe(remainingBefore); // success never changes remaining time
   });
 
-  it('18a. failure applies NO gameplay penalty while the match clock is disabled (the default)', () => {
+  it('18. failure subtracts exactly 180_000ms from the match clock and resumes', () => {
     const deps = createTestDeps(59);
     const result = reachSpecialGameResult(deps);
-    expect(result.room.matchClock.mode).toBe('disabled');
+    expect(result.room.matchClock.status).toBe('paused');
+    const remainingBefore = result.room.matchClock.remainingMs;
     expect(result.room.specialRoundHistory[result.room.specialRoundHistory.length - 1]?.success).toBe(false);
+    expect(result.room.config.specialGame.failPenaltyMs).toBe(180_000);
 
     const resolved = sendHost(result.room, result.priv, { type: 'host:advance', phaseId: result.room.phase.phaseId }, deps);
 
-    expect(resolved.room.matchClock.durationMs).toBeNull();
-    expect(resolved.room.matchClock.penaltyMs).toBe(0);
-    expect(resolved.room.matchLog.some((e) => e.type === 'penalty_applied' && (e.detail as { note?: string }).note?.includes('disabled'))).toBe(true);
+    expect(resolved.room.matchClock.status).toBe('running');
+    expect(resolved.room.matchClock.remainingMs).toBe(remainingBefore - 180_000);
+    expect(resolved.room.matchClock.totalPenaltyMs).toBe(180_000);
+    expect(resolved.room.matchLog.some((e) => e.type === 'penalty_applied')).toBe(true);
   });
 
-  it('18b. failure DOES apply the configured penalty once the match clock is a countdown', () => {
+  it('failure that leaves the match clock at or below zero ends the match immediately as a Hacker win', () => {
     const deps = createTestDeps(61);
     const result = reachSpecialGameResult(deps);
 
-    const withClock = structuredClone(result.room);
-    withClock.matchClock = { mode: 'countdown', startedAt: deps.now(), durationMs: 600_000, penaltyMs: 0, pausedAt: null };
+    // Force remaining time below the penalty so this specific failure ends the match.
+    const almostOut = structuredClone(result.room);
+    almostOut.matchClock = { ...almostOut.matchClock, remainingMs: 100_000 };
 
-    const resolved = sendHost(withClock, result.priv, { type: 'host:advance', phaseId: withClock.phase.phaseId }, deps);
+    const resolved = sendHost(almostOut, result.priv, { type: 'host:advance', phaseId: almostOut.phase.phaseId }, deps);
 
-    expect(resolved.room.matchClock.durationMs).toBe(600_000 - resolved.room.config.specialGame.failPenaltyMs);
-    expect(resolved.room.matchClock.penaltyMs).toBe(resolved.room.config.specialGame.failPenaltyMs);
-    expect(resolved.room.matchLog.some((e) => e.type === 'penalty_applied' && !(e.detail as { note?: string }).note)).toBe(true);
+    expect(resolved.room.winner).toBe('hackers');
+    expect(resolved.room.phase.state).toBe('FINAL_RESULTS');
+    expect(resolved.room.matchClock.status).toBe('stopped');
+    expect(resolved.room.matchClock.remainingMs).toBe(0); // clamped, never negative
   });
 });

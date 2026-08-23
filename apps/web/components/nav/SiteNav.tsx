@@ -8,6 +8,7 @@ import { StickerLabel } from '../graphics/StickerLabel';
 const LINKS = [
   { href: '/', label: 'الرئيسية' },
   { href: '/games', label: 'الألعاب' },
+  { href: '/quiz', label: 'تحدّي جاكوم' },
   { href: '/join', label: 'انضم' },
   { href: '/account', label: 'الحساب' },
 ];

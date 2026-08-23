@@ -6,8 +6,8 @@ describe('CORS', () => {
     const setup = await startTestHttpApi({ allowedOrigins: ['http://allowed.example'] });
     const res = await fetch(`${setup.baseUrl}/api/rooms`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://allowed.example' },
-      body: '{}',
+      headers: { 'Content-Type': 'application/json', Origin: 'http://allowed.example', Cookie: setup.defaultHost.cookieHeader },
+      body: JSON.stringify({ gameSlug: setup.defaultGameSlug }),
     });
     expect(res.status).toBe(201);
     expect(res.headers.get('access-control-allow-origin')).toBe('http://allowed.example');
@@ -49,14 +49,14 @@ describe('CORS', () => {
     await setup.close();
   });
 
-  it('never sets Access-Control-Allow-Credentials (sessions travel in response bodies, not cookies)', async () => {
+  it('Permanent Business Backend: sets Access-Control-Allow-Credentials for every allowed origin (the new auth session cookie requires it — never a wildcard origin alongside it, which browsers refuse anyway)', async () => {
     const setup = await startTestHttpApi({ allowedOrigins: ['http://allowed.example'] });
     const res = await fetch(`${setup.baseUrl}/api/rooms`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://allowed.example' },
-      body: '{}',
+      headers: { 'Content-Type': 'application/json', Origin: 'http://allowed.example', Cookie: setup.defaultHost.cookieHeader },
+      body: JSON.stringify({ gameSlug: setup.defaultGameSlug }),
     });
-    expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+    expect(res.headers.get('access-control-allow-credentials')).toBe('true');
     await setup.close();
   });
 
@@ -64,8 +64,8 @@ describe('CORS', () => {
     const setup = await startTestHttpApi({ allowedOrigins: ['http://allowed.example'] });
     const res = await fetch(`${setup.baseUrl}/api/rooms`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      headers: { 'Content-Type': 'application/json', Cookie: setup.defaultHost.cookieHeader },
+      body: JSON.stringify({ gameSlug: setup.defaultGameSlug }),
     });
     expect(res.status).toBe(201);
     await setup.close();

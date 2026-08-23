@@ -23,7 +23,7 @@ afterEach(() => {
 describe('API client (configured)', () => {
   it('createRoom() POSTs to /api/rooms against the configured base URL with a JSON content-type', async () => {
     fetchMock.mockResolvedValue(jsonResponse(201, { roomCode: 'AB23XY', hostSessionToken: 't', tv: {} }));
-    await createRoom();
+    await createRoom({ gameSlug: 'hackers' });
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -52,21 +52,21 @@ describe('API client (configured)', () => {
 
   it('maps a non-2xx JSON error response to a typed ApiClientError carrying the server code and status', async () => {
     fetchMock.mockResolvedValue(jsonResponse(429, { code: 'RATE_LIMITED', message: 'محاولات كثيرة جدًا.' }));
-    await expect(createRoom()).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
+    await expect(createRoom({ gameSlug: 'hackers' })).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
   });
 
   it('maps a network failure (fetch rejects) to a typed NETWORK_ERROR', async () => {
     fetchMock.mockRejectedValue(new TypeError('fetch failed'));
-    await expect(createRoom()).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(createRoom({ gameSlug: 'hackers' })).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
   });
 
   it('maps an aborted/timed-out request to a typed TIMEOUT error', async () => {
     fetchMock.mockImplementation(() => Promise.reject(new DOMException('The operation was aborted.', 'AbortError')));
-    await expect(createRoom()).rejects.toMatchObject({ code: 'TIMEOUT' });
+    await expect(createRoom({ gameSlug: 'hackers' })).rejects.toMatchObject({ code: 'TIMEOUT' });
   });
 
   it('a malformed (non-JSON) response body becomes a typed ApiClientError, never an unhandled parse exception', async () => {
     fetchMock.mockResolvedValue(new Response('not json', { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    await expect(createRoom()).rejects.toBeInstanceOf(ApiClientError);
+    await expect(createRoom({ gameSlug: 'hackers' })).rejects.toBeInstanceOf(ApiClientError);
   });
 });
